@@ -1,0 +1,70 @@
+======================================
+TRINITY AI - TARGETS & TESTING GUIDE
+======================================
+
+DISCLAIMER: Only scan infrastructure that you own or have explicit written permission to test. Unauthorized scanning is illegal.
+
+Below are the three safest and most effective targets to test and verify TrinityAI's capabilities.
+
+---------------------------------------------------------
+TARGET 1: OWASP JUICE SHOP (Easiest / Web Focus)
+---------------------------------------------------------
+Juice Shop is a modern web application intentionally filled with critical security flaws (OWASP Top 10). It is perfect for testing TrinityAI's web enumeration tools (nikto, dirb, sqlmap).
+
+How to Set Up:
+1. Open PowerShell and run this command:
+   docker run --rm -p 3000:3000 bkimminich/juice-shop
+2. Keep that terminal open. The vulnerable app is now running on your machine.
+
+How to Scan in TrinityAI:
+1. Open your TrinityAI Dashboard (http://localhost:5173/scans).
+2. Click "New Scan".
+3. Target IP: 172.17.0.1 (This is the default Docker gateway/host IP, though you may need to use your Windows LAN IP, e.g., 192.168.x.x).
+4. Profile: "Web Scan" or "Full".
+
+How to Verify the Results:
+- In the "Attack Graph" page, you should see port 3000 populate.
+- The logs should show Trinity discovering JavaScript files, admin endpoints, and SQL injection flaws.
+- You can manually verify the results by going to your browser at http://localhost:3000 and confirming the vulnerabilities exist.
+
+---------------------------------------------------------
+TARGET 2: METASPLOITABLE 2 (Best for Network / Full Scans)
+---------------------------------------------------------
+Metasploitable 2 is an intentionally vulnerable Linux Virtual Machine. It has dozens of notoriously insecure services running (FTP backdoors, old SSH, weak SQL passwords). 
+
+How to Set Up:
+1. Download Oracle VirtualBox (free) or VMware Workstation Player.
+2. Download the 'Metasploitable 2' VM image from SourceForge.
+3. Boot the VM in VirtualBox.
+4. Log into the VM (username: msfadmin, password: msfadmin).
+5. Type `ifconfig` in the VM to get its IP address (e.g., 192.168.1.50).
+
+How to Scan in TrinityAI:
+1. Ensure your `.env` file SCOPE_SUBNET allows the IP (e.g., if the VM is 192.168.1.50, ensure SCOPE_SUBNET=192.168.1.0/24).
+2. Create a "New Scan" in Trinity UI.
+3. Target IP: The Metasploitable VM IP (e.g., 192.168.1.50).
+4. Profile: "Full".
+
+How to Verify the Results:
+- Look at the "Vulnerabilities" table in the Trinity UI. It should be flooded with "Critical" and "High" alerts.
+- Check the execution logs. You should see `nmap` discovering exactly 20+ open ports.
+- Manual verification: Open a terminal on your host Windows PC and run `nmap <IP_ADDRESS>` yourself. The output should exactly match the nodes that Trinity plotted on the Graph.
+
+---------------------------------------------------------
+TARGET 3: scanme.nmap.org (Best for Quick External Checks)
+---------------------------------------------------------
+The authors of Nmap host a server directly for users to test port scanning tools.
+
+How to Set Up:
+- No setup required. It is available publicly on the internet.
+
+How to Scan in TrinityAI:
+1. Open Trinity UI.
+2. Create a "New Scan".
+3. Target: scanme.nmap.org
+4. Profile: "Quick" (DO NOT run 'Full' or 'Stealth' on this server, as they request no aggressive brute forcing).
+
+How to Verify the Results:
+- Trinity should successfully resolve the domain to its IP address.
+- It will find a few standard ports open (like 22 for SSH and 80 for HTTP). 
+- This proves the Docker backend container successfully routed traffic to the public internet and accurately parsed the response.

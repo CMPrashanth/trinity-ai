@@ -1,0 +1,57 @@
+======================================
+TRINITY AI - SETUP & EXECUTION GUIDE
+======================================
+
+1. PREREQUISITES
+----------------
+- Docker Desktop (Running)
+- Node.js (v18+) and npm installed on your Windows Host
+- Python (If you want to run scripts manually, though Docker handles the backend)
+
+2. BUILD THE AI SANDBOX (One-Time Setup or After Updates)
+---------------------------------------------------------
+Since the backend Docker container acts as the AI's execution sandbox, it needs the pentesting tools installed (nmap, nikto, sqlmap, etc.).
+1. Open a PowerShell terminal.
+2. Navigate to the project root:
+   cd "G:\final project\project code"
+3. Build the backend image:
+   docker compose build backend
+
+3. START THE BACKEND & INFRASTRUCTURE
+-------------------------------------
+1. In the same terminal, boot the environment:
+   docker compose up -d
+
+This command automatically starts:
+- PostgreSQL (Relational DB)
+- Neo4j (Graph Database)
+- Redis (Task Queue caching)
+- ChromaDB (Vector DB for RAG)
+- Ollama (Local AI hosting WhiteRabbitNeo)
+- n8n (Workflow automation)
+- Trinity Backend (FastAPI on Port 8080)
+
+*Note: The first startup takes ~1-2 minutes for Ollama to load the WhiteRabbitNeo LLM into memory. If the AI doesn't respond immediately, it is still loading.*
+
+4. START THE FRONTEND
+---------------------
+1. Open a *separate* new PowerShell terminal.
+2. Navigate to the frontend folder:
+   cd "G:\final project\project code\frontend"
+3. Install dependencies (if you haven't recently):
+   npm install
+4. Run the development server:
+   npm run dev
+
+5. ACCESSING THE SYSTEM
+-----------------------
+- Application User Interface: http://localhost:5173
+- Backend Swagger API Docs: http://localhost:8080/api/v1/docs
+- Neo4j Database UI: http://localhost:7474 (User: neo4j / Pass: password)
+- n8n Workflow UI: http://localhost:5678
+
+6. STOPPING THE SYSTEM
+----------------------
+To shut down the backend and free up system memory:
+cd "G:\final project\project code"
+docker compose down

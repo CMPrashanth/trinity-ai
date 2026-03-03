@@ -1,0 +1,46 @@
+# Trinity Agent Backend Dependencies
+
+# Core Framework & Server
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+gunicorn==23.0.0             # Added: Production process manager
+python-multipart==0.0.12
+
+# Database (SQL)
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+# Graph Database
+neo4j==5.26.0
+
+# Vector Database & Embeddings
+chromadb==0.5.23
+sentence-transformers==3.3.1
+ollama==0.6.1
+
+# LLM & Agent Networking (New Additions)
+openai==1.57.0               # Added: Standard LLM client
+httpx==0.27.2                # Added: Async HTTP client (needed for Agent tools/calls)
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.1
+
+# Validation & Settings
+pydantic==2.10.3
+pydantic-settings==2.6.1
+email-validator==2.2.0
+
+# Background Tasks
+celery==5.4.0
+redis==5.2.0
+
+# Utilities
+python-dotenv==1.0.1
+psutil==6.1.0                # Added: System monitoring for agent status (used by /agent/status)
+
+# Optional (mock fallbacks used if not installed)
+# neo4j can run in mock mode during local dev if you skip the container
+# neo4j==5.26.0

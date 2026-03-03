@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Environment Variables (NEVER commit secrets!)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Node/Frontend
+node_modules/
+dist/
+build/
+.npm
+.eslintcache
+
+# Databases (local only)
+*.db
+trinity.db
+*.sqlite
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Temporary
+temp/
+tmp/
+*.tmp
+
+# Git
+.git/
