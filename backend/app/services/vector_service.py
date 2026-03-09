@@ -78,7 +78,7 @@ class VectorService:
             return
         
         try:
-            self.collection.add(
+            self.collection.upsert(
                 documents=[description],
                 metadatas=[metadata or {}],
                 ids=[cve_id]
@@ -138,7 +138,7 @@ class VectorService:
             documents = [cve['description'] for cve in cve_list]
             metadatas = [cve.get('metadata', {}) for cve in cve_list]
             
-            self.collection.add(
+            self.collection.upsert(
                 ids=ids,
                 documents=documents,
                 metadatas=metadatas

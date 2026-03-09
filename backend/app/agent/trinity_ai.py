@@ -10,7 +10,6 @@ This module implements the full Trinity architecture:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -29,6 +28,16 @@ from ..services.ai_interface import (
 from ..services.ollama_client import OllamaClient
 from ..services.graph_service import GraphService
 from ..services.vector_service import VectorService
+
+try:
+    from ..services.langchain_service import LangChainService
+except Exception:  # pragma: no cover
+    LangChainService = None
+
+try:
+    from ..services.langgraph_workflow import LangGraphSecurityWorkflow
+except Exception:  # pragma: no cover
+    LangGraphSecurityWorkflow = None
 from .guard import validate_scope, validate_safety
 from .executor import CommandExecutor, ExecutionResult
 from .planner import AttackPlanner
@@ -64,6 +73,26 @@ class TrinityAI(AIInterface):
         )
         self.graph_service = graph_service or GraphService()
         self.vector_service = vector_service or VectorService()
+        self.langchain_service = None
+        self.langgraph_workflow = None
+
+        if settings.USE_LANGCHAIN and LangChainService is not None:
+            try:
+                self.langchain_service = LangChainService(
+                    model=self.llm_model,
+                    base_url=settings.OLLAMA_BASE_URL,
+                )
+            except Exception as e:
+                print(f"⚠️ LangChain disabled due to initialization error: {e}")
+
+        if settings.USE_LANGGRAPH and LangGraphSecurityWorkflow is not None:
+            try:
+                self.langgraph_workflow = LangGraphSecurityWorkflow(
+                    vector_service=self.vector_service,
+                    langchain_service=self.langchain_service,
+                )
+            except Exception as e:
+                print(f"⚠️ LangGraph disabled due to initialization error: {e}")
         
         # Runtime state
         self._execution_logs: List[ExecutionLogEntry] = []
@@ -149,6 +178,19 @@ class TrinityAI(AIInterface):
             raise ValueError("All plan steps were blocked by safety guard")
         
         plan.steps = validated_steps
+
+        if self.langchain_service is not None:
+            try:
+                adjustment = await self.langchain_service.plan_adjustments(
+                    target=target,
+                    scan_profile=scan_profile,
+                    existing_reasoning=plan.reasoning,
+                )
+                if adjustment:
+                    plan.reasoning = f"{plan.reasoning}\n\nLangChain Guidance:\n{adjustment}"
+            except Exception as e:
+                self._log("warning", "LangChain", f"Plan enhancement skipped: {e}")
+
         return plan
     
     async def execute_scan(
@@ -196,9 +238,25 @@ class TrinityAI(AIInterface):
         
         # Analyze for vulnerabilities using RAG
         if all_services:
-            self._log("info", "Observer", "Analyzing services for vulnerabilities")
-            vulns = await self._analyze_services_for_vulns(all_services)
-            all_vulns.extend(vulns)
+            if self.langgraph_workflow is not None:
+                self._log("info", "LangGraph", "Running workflow for CVE enrichment")
+                try:
+                    workflow_result = await self.langgraph_workflow.run(
+                        target=attack_plan.target,
+                        scan_profile=config.get("scan_profile", "quick"),
+                        services=all_services,
+                    )
+                    graph_vulns = workflow_result.get("vulnerabilities", [])
+                    all_vulns.extend(self._to_vulnerability_models(graph_vulns))
+                    self._log("success", "LangGraph", f"Workflow produced {len(graph_vulns)} candidates")
+                except Exception as e:
+                    self._log("warning", "LangGraph", f"Workflow failed, falling back to RAG: {e}")
+                    vulns = await self._analyze_services_for_vulns(all_services)
+                    all_vulns.extend(vulns)
+            else:
+                self._log("info", "Observer", "Analyzing services for vulnerabilities")
+                vulns = await self._analyze_services_for_vulns(all_services)
+                all_vulns.extend(vulns)
         
         # Deduplicate hosts
         unique_hosts = list(set(all_hosts))
@@ -327,6 +385,7 @@ class TrinityAI(AIInterface):
                 services.append(ServiceIdentification(
                     host=current_host,
                     service=service_name,
+                    metadata={"port": port_num},
                 ))
         
         return hosts, ports, services
@@ -389,6 +448,44 @@ class TrinityAI(AIInterface):
             return healed.get("corrected_command", failed_script)
         except Exception as e:
             raise SelfHealError(f"Could not generate heal script: {e}")
+
+    def _to_vulnerability_models(
+        self,
+        raw_vulnerabilities: List[Dict[str, Any]],
+    ) -> List[VulnerabilityFinding]:
+        """Convert workflow dictionaries into validated VulnerabilityFinding models."""
+        normalized: List[VulnerabilityFinding] = []
+        allowed_severity = {"critical", "high", "medium", "low", "info"}
+
+        for vuln in raw_vulnerabilities:
+            cve_id = str(vuln.get("cve") or "").strip()
+            if not cve_id.startswith("CVE-"):
+                continue
+
+            severity = str(vuln.get("severity") or "medium").lower()
+            if severity not in allowed_severity:
+                severity = "medium"
+
+            references = vuln.get("references", [])
+            if not isinstance(references, list):
+                references = []
+
+            normalized.append(VulnerabilityFinding(
+                cve=cve_id,
+                title=str(vuln.get("title") or f"Potential vulnerability ({cve_id})"),
+                severity=severity,
+                cvss=vuln.get("cvss"),
+                target=str(vuln.get("target") or "unknown"),
+                port=str(vuln.get("port") or "unknown"),
+                service=vuln.get("service"),
+                description=vuln.get("description"),
+                remediation=vuln.get("remediation"),
+                exploit_available=bool(vuln.get("exploit_available", False)),
+                references=references,
+                metadata=vuln.get("metadata") if isinstance(vuln.get("metadata"), dict) else {},
+            ))
+
+        return normalized
     
     async def analyze_vulnerability(
         self,

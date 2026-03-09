@@ -134,3 +134,24 @@ async def reset_settings(
     db.refresh(default_settings)
     
     return {"message": "Settings reset to default values"}
+
+
+@router.post("/settings/cve/sync-now")
+async def trigger_cve_sync(
+    current_user: User = Depends(get_current_user),
+):
+    """Queue an on-demand CVE feed synchronization task."""
+    try:
+        from ..tasks.cve_tasks import sync_cve_feed
+
+        task = sync_cve_feed.delay()
+        return {
+            "message": "CVE synchronization task queued",
+            "taskId": task.id,
+            "queuedBy": current_user.email,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to queue CVE sync task: {exc}",
+        )

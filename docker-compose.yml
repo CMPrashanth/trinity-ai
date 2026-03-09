@@ -156,6 +156,13 @@ services:
       - USE_SQLITE=False
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
       - LLM_MODEL_ID=${LLM_MODEL_ID:-WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest}
+      - USE_LANGCHAIN=${USE_LANGCHAIN:-true}
+      - USE_LANGGRAPH=${USE_LANGGRAPH:-true}
+      - NVD_API_KEY=${NVD_API_KEY:-}
+      - NVD_BASE_URL=${NVD_BASE_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}
+      - NVD_RESULTS_PER_PAGE=${NVD_RESULTS_PER_PAGE:-2000}
+      - CVE_SYNC_INTERVAL_HOURS=${CVE_SYNC_INTERVAL_HOURS:-6}
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/cve-sync}
     ports:
       - "8080:8080"
     depends_on:
@@ -174,6 +181,90 @@ services:
     networks:
       - trinity_network
     command: uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trinity_celery_worker
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER:-trinity}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-trinity_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-trinity_db}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - CHROMA_DB_PATH=${CHROMA_DB_PATH:-/data}
+      - REDIS_HOST=redis
+      - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
+      - USE_SQLITE=False
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest}
+      - USE_LANGCHAIN=${USE_LANGCHAIN:-true}
+      - USE_LANGGRAPH=${USE_LANGGRAPH:-true}
+      - NVD_API_KEY=${NVD_API_KEY:-}
+      - NVD_BASE_URL=${NVD_BASE_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}
+      - NVD_RESULTS_PER_PAGE=${NVD_RESULTS_PER_PAGE:-2000}
+      - CVE_SYNC_INTERVAL_HOURS=${CVE_SYNC_INTERVAL_HOURS:-6}
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/cve-sync}
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+    networks:
+      - trinity_network
+    command: celery -A app.celery_app.celery worker --loglevel=info
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trinity_celery_beat
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER:-trinity}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-trinity_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-trinity_db}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - CHROMA_DB_PATH=${CHROMA_DB_PATH:-/data}
+      - REDIS_HOST=redis
+      - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
+      - USE_SQLITE=False
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest}
+      - USE_LANGCHAIN=${USE_LANGCHAIN:-true}
+      - USE_LANGGRAPH=${USE_LANGGRAPH:-true}
+      - NVD_API_KEY=${NVD_API_KEY:-}
+      - NVD_BASE_URL=${NVD_BASE_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}
+      - NVD_RESULTS_PER_PAGE=${NVD_RESULTS_PER_PAGE:-2000}
+      - CVE_SYNC_INTERVAL_HOURS=${CVE_SYNC_INTERVAL_HOURS:-6}
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/cve-sync}
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+    networks:
+      - trinity_network
+    command: celery -A app.celery_app.celery beat --loglevel=info
 
 volumes:
   postgres_data:

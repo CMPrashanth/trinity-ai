@@ -3,9 +3,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import redis
 
 from .config import settings
 from .database import init_db
+from .services.vector_service import VectorService
 from .api import (
     auth,
     scans,
@@ -25,6 +27,31 @@ async def lifespan(app: FastAPI):
     print("🚀 Trinity Agent API starting...")
     init_db()
     print("✅ Database initialized")
+
+    # Startup sanity checks for dependent services used by autonomous workflows.
+    try:
+        redis_client = redis.Redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        if redis_client.ping():
+            print("✅ Redis reachable")
+    except Exception as exc:
+        print(f"⚠️ Redis check failed: {exc}")
+
+    try:
+        vector_service = VectorService()
+        if vector_service.collection is not None:
+            count = vector_service.collection.count()
+            print(f"✅ ChromaDB reachable, CVE records available: {count}")
+        else:
+            print("⚠️ ChromaDB not available; fallback CVE data will be used")
+    except Exception as exc:
+        print(f"⚠️ ChromaDB startup check failed: {exc}")
+
     yield
     # Shutdown
     print("👋 Trinity Agent API shutting down...")

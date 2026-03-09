@@ -4,54 +4,74 @@ TRINITY AI - SETUP & EXECUTION GUIDE
 
 1. PREREQUISITES
 ----------------
-- Docker Desktop (Running)
-- Node.js (v18+) and npm installed on your Windows Host
-- Python (If you want to run scripts manually, though Docker handles the backend)
+- Docker Desktop running
+- Node.js 18+ and npm
+- Git (optional, for pulling updates)
 
-2. BUILD THE AI SANDBOX (One-Time Setup or After Updates)
----------------------------------------------------------
-Since the backend Docker container acts as the AI's execution sandbox, it needs the pentesting tools installed (nmap, nikto, sqlmap, etc.).
-1. Open a PowerShell terminal.
-2. Navigate to the project root:
-   cd "G:\final project\project code"
-3. Build the backend image:
-   docker compose build backend
-
-3. START THE BACKEND & INFRASTRUCTURE
--------------------------------------
-1. In the same terminal, boot the environment:
-   docker compose up -d
-
-This command automatically starts:
-- PostgreSQL (Relational DB)
-- Neo4j (Graph Database)
-- Redis (Task Queue caching)
-- ChromaDB (Vector DB for RAG)
-- Ollama (Local AI hosting WhiteRabbitNeo)
-- n8n (Workflow automation)
-- Trinity Backend (FastAPI on Port 8080)
-
-*Note: The first startup takes ~1-2 minutes for Ollama to load the WhiteRabbitNeo LLM into memory. If the AI doesn't respond immediately, it is still loading.*
-
-4. START THE FRONTEND
----------------------
-1. Open a *separate* new PowerShell terminal.
-2. Navigate to the frontend folder:
-   cd "G:\final project\project code\frontend"
-3. Install dependencies (if you haven't recently):
-   npm install
-4. Run the development server:
-   npm run dev
-
-5. ACCESSING THE SYSTEM
+2. CLONE / OPEN PROJECT
 -----------------------
-- Application User Interface: http://localhost:5173
-- Backend Swagger API Docs: http://localhost:8080/api/v1/docs
-- Neo4j Database UI: http://localhost:7474 (User: neo4j / Pass: password)
-- n8n Workflow UI: http://localhost:5678
+1. Open PowerShell.
+2. Go to project root:
+   cd "G:\final project\project code"
 
-6. STOPPING THE SYSTEM
+3. BUILD BACKEND IMAGES
+-----------------------
+Build after first setup or when dependencies/Dockerfile changes:
+
+docker compose build backend celery_worker celery_beat
+
+4. START BACKEND STACK
 ----------------------
-To shut down the backend and free up system memory:
+Start all services:
+
+docker compose up -d
+
+Services started:
+- `postgres` (relational DB)
+- `neo4j` (graph DB)
+- `redis` (broker/backend)
+- `chromadb` (vector DB)
+- `ollama` (local LLM runtime)
+- `n8n` (workflow automation)
+- `backend` (FastAPI)
+- `celery_worker` (background jobs)
+- `celery_beat` (scheduled CVE sync)
+
+Check status:
+
+docker compose ps
+
+Note:
+- First start can take a few minutes while Ollama loads/pulls model.
+
+5. START FRONTEND
+-----------------
+In a new terminal:
+
+cd "G:\final project\project code\frontend"
+npm install
+npm run dev
+
+6. ACCESS URLS
+--------------
+- UI: http://localhost:5173
+- Backend API docs: http://localhost:8080/api/v1/docs
+- Neo4j Browser: http://localhost:7474 (neo4j / password)
+- n8n UI: http://localhost:5678
+
+7. CVE SYNC (OPTIONAL TEST)
+---------------------------
+Manual trigger endpoint (authenticated):
+
+POST /api/v1/settings/cve/sync-now
+
+Useful logs:
+
+docker compose logs -f backend
+docker compose logs -f celery_worker
+docker compose logs -f celery_beat
+
+8. STOP SERVICES
+----------------
 cd "G:\final project\project code"
 docker compose down

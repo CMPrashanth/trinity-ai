@@ -52,3 +52,14 @@ tmp/
 
 # Git
 .git/
+
+# Report artifacts (local only, do not commit)
+REPORT_*.txt
+Ai Pentest*.docx
+Project Report Format.docx
+~$*.docx
+Schema Diagram.jpg
+Use Case Diagram.jpg
+
+# One-off local document processing helpers
+/_*.py

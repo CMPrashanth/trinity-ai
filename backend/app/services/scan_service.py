@@ -103,8 +103,11 @@ class ScanService:
             
             # Step 2: Execute the scan
             self._create_log(scan.id, LogLevel.INFO, "Executor", "Executing scan commands")
-            
-            scan_result = await self.ai.execute_scan(attack_plan, scan.config)
+
+            execution_config = dict(scan.config or {})
+            execution_config.setdefault("scan_profile", scan.profile.value)
+
+            scan_result = await self.ai.execute_scan(attack_plan, execution_config)
             
             self._create_log(scan.id, LogLevel.SUCCESS, "Executor", "Scan execution completed")
             

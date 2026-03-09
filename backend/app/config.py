@@ -62,10 +62,19 @@ class Settings(BaseSettings):
     # LLM / Agent Settings
     OLLAMA_BASE_URL: str = "http://ollama:11434"
     LLM_MODEL_ID: str = "WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest"
+    USE_LANGGRAPH: bool = True
+    USE_LANGCHAIN: bool = True
     MAX_RETRIES: int = 3
     EXECUTION_TIMEOUT: int = 30
     ENABLE_SELF_HEALING: bool = True
     CIRCUIT_BREAKER_ENABLED: bool = True
+
+    # CVE feed ingestion and automation
+    NVD_API_KEY: str = ""
+    NVD_BASE_URL: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    NVD_RESULTS_PER_PAGE: int = 2000
+    CVE_SYNC_INTERVAL_HOURS: int = 6
+    N8N_WEBHOOK_URL: str = ""
     
     # Groq Cloud API (Testing fallback only - WhiteRabbitNeo is production)
     # Get free API key from https://console.groq.com
