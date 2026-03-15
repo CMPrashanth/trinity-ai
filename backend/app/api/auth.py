@@ -37,7 +37,7 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
     db.refresh(new_user)
     
     # Create default settings for user
-    default_settings = UserSettings(user_id=new_user.id)
+    default_settings = UserSettings(user_id=new_user.id, allowed_subnet=settings.SCOPE_SUBNET)
     db.add(default_settings)
     db.commit()
     

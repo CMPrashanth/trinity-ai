@@ -23,10 +23,18 @@ async def create_scan(
     """Create and initiate a new scan"""
     scan_service = ScanService(db)
     scan = await scan_service.create_scan(scan_data, current_user.id)
-    
-    # Trigger background scan task (this would normally start the actual scan)
-    # For now, we'll just mark it as running
-    await scan_service.start_scan(scan.id)
+
+    # Queue scan execution in the background (Celery worker)
+    try:
+        from ..tasks.scan_tasks import run_scan
+
+        run_scan.delay(scan.id)
+    except Exception as exc:
+        # If we cannot queue the task, surface an actionable error.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to queue scan task: {exc}",
+        )
     
     return scan
 

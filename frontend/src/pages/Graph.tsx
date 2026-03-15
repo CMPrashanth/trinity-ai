@@ -9,6 +9,7 @@ import { Network, ZoomIn, ZoomOut, LocateFixed, RefreshCw, Download, Loader2 } f
 import { graphAPI, GraphData } from "@/lib/api";
 import { useTheme } from "next-themes";
 import { forceCenter, forceLink, forceManyBody } from 'd3-force';
+import "./graph-colors.css";
 
 const nodeColors: Record<string, string> = {
   host: "hsl(185, 100%, 40%)",
@@ -26,11 +27,29 @@ const severityColors: Record<string, string> = {
   info: "hsl(210, 40%, 82%)",
 };
 
+const legendDotClass: Record<string, string> = {
+  host: "graph-legend-dot-host",
+  port: "graph-legend-dot-port",
+  vulnerability: "graph-legend-dot-vulnerability",
+  cve: "graph-legend-dot-cve",
+  service: "graph-legend-dot-service",
+};
+
+const severityClass: Record<string, string> = {
+  critical: "graph-sev-critical",
+  high: "graph-sev-high",
+  medium: "graph-sev-medium",
+  low: "graph-sev-low",
+  info: "graph-sev-info",
+};
+
 export default function GraphPage() {
-  const { theme } = useTheme();
+  const { theme, resolvedTheme } = useTheme();
+  const isDark = (resolvedTheme ?? theme) === 'dark';
   const fgRef = useRef<ForceGraphMethods>();
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [selectedNode, setSelectedNode] = useState<NodeObject | null>(null);
+  const [hasAutoFit, setHasAutoFit] = useState(false);
 
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["graphData"],
@@ -52,14 +71,21 @@ export default function GraphPage() {
     if (fgRef.current && graphData.nodes.length > 0) {
       // Safely access existing forces initialized by react-force-graph
       const linkForce = fgRef.current.d3Force('link');
-      if (linkForce) linkForce.distance(40);
+      if (linkForce) linkForce.distance(80);
       
       const chargeForce = fgRef.current.d3Force('charge');
-      if (chargeForce) chargeForce.strength(-100);
+      if (chargeForce) chargeForce.strength(-180);
 
-      fgRef.current.zoomToFit(400);
+      // On first render, the ref may not be ready when data arrives.
+      // Schedule a fit on the next tick to avoid requiring manual "fit view" clicks.
+      if (!hasAutoFit) {
+        setTimeout(() => {
+          fgRef.current?.zoomToFit(600, 100);
+          setHasAutoFit(true);
+        }, 0);
+      }
     }
-  }, [graphData]);
+  }, [graphData, hasAutoFit]);
 
   const handleNodeClick = useCallback((node: NodeObject) => {
     setSelectedNode(node);
@@ -94,16 +120,20 @@ export default function GraphPage() {
     ctx.fill();
 
     if (selectedNode && node.id === selectedNode.id) {
-      ctx.strokeStyle = theme === 'dark' ? 'white' : 'black';
+      ctx.strokeStyle = isDark ? 'white' : 'black';
       ctx.lineWidth = 2 / globalScale;
       ctx.stroke();
     }
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = theme === 'dark' ? 'white' : 'black';
+    // Improve readability against both light/dark backgrounds.
+    ctx.lineWidth = 3 / globalScale;
+    ctx.strokeStyle = isDark ? 'rgba(0, 0, 0, 0.85)' : 'rgba(255, 255, 255, 0.9)';
+    ctx.strokeText(label, node.x, node.y + radius + 5);
+    ctx.fillStyle = isDark ? 'white' : 'black';
     ctx.fillText(label, node.x, node.y + radius + 5);
-  }, [selectedNode, theme]);
+  }, [selectedNode, isDark]);
 
   return (
     <Layout>
@@ -144,13 +174,18 @@ export default function GraphPage() {
                 ref={fgRef}
                 graphData={graphData}
                 nodeCanvasObject={renderNode}
-                linkWidth={1}
-                linkColor={() => theme === 'dark' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}
+                linkWidth={1.5}
+                // Use resolved theme, not the raw "theme" setting (can be "system").
+                linkColor={() => isDark ? 'rgba(255, 255, 255, 0.55)' : 'rgba(0, 0, 0, 0.35)'}
                 linkDirectionalParticles={2}
                 linkDirectionalParticleWidth={2}
                 linkDirectionalParticleColor={() => "hsl(var(--primary))"}
                 onNodeClick={handleNodeClick}
                 onBackgroundClick={() => setSelectedNode(null)}
+                onEngineStop={() => {
+                  // Another safety net to ensure nodes are in view after refresh.
+                  fgRef.current?.zoomToFit(600, 100);
+                }}
                 width={800}
                 height={600}
                 cooldownTicks={100}
@@ -161,7 +196,7 @@ export default function GraphPage() {
                 <div className="space-y-1.5">
                   {Object.entries(nodeColors).map(([type, color]) => (
                     <div key={type} className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
+                      <div className={`w-3 h-3 rounded-full ${legendDotClass[type] ?? ''}`} />
                       <span className="text-xs text-muted-foreground capitalize">{type}</span>
                     </div>
                   ))}
@@ -194,7 +229,7 @@ export default function GraphPage() {
                       <div key={key}>
                         <p className="text-xs text-muted-foreground mb-1 capitalize">{key.replace(/_/g, ' ')}</p>
                         {key === 'severity' ? (
-                           <Badge style={{ backgroundColor: severityColors[(value as string)?.toLowerCase()] }}>
+                           <Badge className={severityClass[String(value).toLowerCase()] ?? undefined}>
                              {String(value)}
                            </Badge>
                         ) : (
@@ -217,7 +252,3 @@ export default function GraphPage() {
     </Layout>
   );
 }
-
- 
- 
- 

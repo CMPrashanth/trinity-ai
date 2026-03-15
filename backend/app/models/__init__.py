@@ -7,6 +7,7 @@ from datetime import datetime
 import enum
 
 from ..database import Base
+from ..config import settings
 
 
 class User(Base):
@@ -178,7 +179,7 @@ class UserSettings(Base):
     graph_hygiene_enabled = Column(Boolean, default=True)
     
     # Scope Settings
-    allowed_subnet = Column(String(255), default="192.168.1.0/24")
+    allowed_subnet = Column(String(255), default=lambda: settings.SCOPE_SUBNET)
     blocked_commands = Column(JSON, default=["-T5", "--script=dos", "rm -rf", "format"])
     
     # Notification Settings

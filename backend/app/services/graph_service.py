@@ -15,6 +15,28 @@ except ImportError:
 
 class GraphService:
     """Service for Neo4j graph operations"""
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        """Convert Neo4j/native values into JSON-serializable primitives."""
+
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+
+        if isinstance(value, (list, tuple)):
+            return [GraphService._json_safe(item) for item in value]
+
+        if isinstance(value, dict):
+            return {str(k): GraphService._json_safe(v) for k, v in value.items()}
+
+        # Neo4j temporal/spatial types (e.g., neo4j.time.DateTime) are not JSON-serializable.
+        # We convert them to strings to avoid FastAPI serialization failures.
+        module_name = getattr(value.__class__, "__module__", "")
+        if module_name.startswith("neo4j."):
+            return str(value)
+
+        # Last resort: stringify unknown objects.
+        return str(value)
     
     def __init__(self):
         self.driver = None
@@ -66,11 +88,31 @@ class GraphService:
                 
                 nodes = []
                 for record in nodes_result:
-                    props = record["properties"]
+                    props = self._json_safe(record["properties"])
+                    node_type = record["type"]
+
+                    label = props.get("label") or props.get("name")
+                    if not label:
+                        if node_type == "Host":
+                            label = props.get("ip") or "Unknown Host"
+                        elif node_type == "Port":
+                            number = props.get("number")
+                            service = props.get("service")
+                            if number and service:
+                                label = f"{number}/{service}"
+                            elif number:
+                                label = str(number)
+                            else:
+                                label = "Unknown Port"
+                        elif node_type == "CVE":
+                            label = props.get("cve_id") or props.get("title") or "Unknown CVE"
+                        else:
+                            label = "Unknown"
+
                     nodes.append({
                         "id": str(record["id"]),
-                        "label": props.get("label", props.get("name", "Unknown")),
-                        "type": record["type"].lower(),
+                        "label": label,
+                        "type": node_type.lower(),
                         "properties": props
                     })
                 
@@ -96,7 +138,7 @@ class GraphService:
                         "from": str(record["from"]),
                         "to": str(record["to"]),
                         "relationship": record["relationship"],
-                        "properties": record["properties"]
+                        "properties": self._json_safe(record["properties"])
                     })
                 
                 return {
@@ -212,6 +254,8 @@ class GraphService:
         
         try:
             with self.driver.session() as session:
+                properties.setdefault("label", ip)
+                properties.setdefault("name", ip)
                 query = """
                 MERGE (h:Host {ip: $ip})
                 SET h.scan_id = $scan_id, h.updated_at = datetime()
@@ -223,6 +267,76 @@ class GraphService:
                 return True
         except Exception as e:
             print(f"⚠️  Create host node failed: {e}")
+            return False
+
+    async def create_network_node(
+        self,
+        cidr: str,
+        scan_id: str,
+        name: Optional[str] = None,
+        **properties,
+    ) -> bool:
+        """Create a Network node in Neo4j."""
+
+        cidr = (cidr or "").strip()
+        if not cidr:
+            return False
+
+        if not self.driver:
+            print(f"📊 [Mock] Would create Network node: {cidr}")
+            return True
+
+        try:
+            with self.driver.session() as session:
+                label = name or cidr
+                properties.setdefault("label", label)
+                properties.setdefault("name", label)
+                query = """
+                MERGE (n:Network {cidr: $cidr})
+                SET n.scan_id = $scan_id, n.updated_at = datetime(), n.label = $label, n.name = $label
+                """
+                for key, value in properties.items():
+                    query += f", n.{key} = ${key}"
+
+                session.run(query, cidr=cidr, scan_id=scan_id, label=label, **properties)
+                return True
+        except Exception as e:
+            print(f"⚠️  Create network node failed: {e}")
+            return False
+
+    async def connect_host_to_network(
+        self,
+        cidr: str,
+        host_ip: str,
+        scan_id: str,
+        relationship: str = "IN_NETWORK",
+    ) -> bool:
+        """Connect a Host node to a Network node."""
+
+        cidr = (cidr or "").strip()
+        host_ip = (host_ip or "").strip()
+        if not cidr or not host_ip:
+            return False
+
+        if not self.driver:
+            print(f"📊 [Mock] Would connect Host {host_ip} -> Network {cidr}")
+            return True
+
+        if not relationship.isidentifier():
+            relationship = "IN_NETWORK"
+
+        try:
+            with self.driver.session() as session:
+                query = f"""
+                MATCH (h:Host {{ip: $host_ip}})
+                MATCH (n:Network {{cidr: $cidr}})
+                MERGE (h)-[:{relationship}]->(n)
+                SET h.scan_id = $scan_id, n.scan_id = $scan_id
+                """
+                session.run(query, host_ip=host_ip, cidr=cidr, scan_id=scan_id)
+                return True
+        except Exception as e:
+            print(f"⚠️  Connect host to network failed: {e}")
             return False
     
     async def create_port_node(
@@ -241,13 +355,14 @@ class GraphService:
         
         try:
             with self.driver.session() as session:
+                label = f"{port}/{service}" if service else str(port)
                 query = """
                 MATCH (h:Host {ip: $host_ip})
                 MERGE (p:Port {number: $port, host_ip: $host_ip})
-                SET p.service = $service, p.version = $version, p.scan_id = $scan_id
+                SET p.service = $service, p.version = $version, p.scan_id = $scan_id, p.updated_at = datetime(), p.label = $label, p.name = $label
                 MERGE (h)-[:HAS_PORT]->(p)
                 """
-                session.run(query, host_ip=host_ip, port=port, service=service, version=version, scan_id=scan_id)
+                session.run(query, host_ip=host_ip, port=port, service=service, version=version, scan_id=scan_id, label=label)
                 return True
         except Exception as e:
             print(f"⚠️  Create port node failed: {e}")
@@ -270,13 +385,14 @@ class GraphService:
         
         try:
             with self.driver.session() as session:
+                label = cve_id
                 query = """
                 MATCH (h:Host {ip: $host_ip})
                 MERGE (c:CVE {cve_id: $cve_id})
-                SET c.severity = $severity, c.cvss = $cvss, c.title = $title, c.scan_id = $scan_id
+                SET c.severity = $severity, c.cvss = $cvss, c.title = $title, c.scan_id = $scan_id, c.updated_at = datetime(), c.label = $label, c.name = $label
                 MERGE (h)-[:VULNERABLE_TO]->(c)
                 """
-                session.run(query, host_ip=host_ip, cve_id=cve_id, severity=severity, cvss=cvss, title=title, scan_id=scan_id)
+                session.run(query, host_ip=host_ip, cve_id=cve_id, severity=severity, cvss=cvss, title=title, scan_id=scan_id, label=label)
                 return True
         except Exception as e:
             print(f"⚠️  Create vulnerability node failed: {e}")
@@ -288,6 +404,7 @@ class GraphService:
         port: int,
         service_name: str,
         banner: Optional[str] = None,
+        scan_id: str = "",
     ) -> bool:
         """Create RUNS_SERVICE relationship between Host and Port."""
         
@@ -298,19 +415,23 @@ class GraphService:
         try:
             with self.driver.session() as session:
                 query = """
-                MATCH (h:Host {ip: $host_ip})-[:HAS_PORT]->(p:Port {number: $port})
-                MERGE (s:Service {name: $service_name})
-                SET s.banner = $banner
+                MATCH (h:Host {ip: $host_ip})-[:HAS_PORT]->(p:Port {number: $port, host_ip: $host_ip})
+                MERGE (s:Service {name: $service_name, scan_id: $scan_id})
+                SET s.banner = $banner, s.updated_at = datetime(), s.label = $service_name, s.name = $service_name
                 MERGE (p)-[:RUNS_SERVICE]->(s)
                 """
-                session.run(query, host_ip=host_ip, port=port, service_name=service_name, banner=banner)
+                session.run(
+                    query,
+                    host_ip=host_ip,
+                    port=port,
+                    service_name=service_name,
+                    banner=banner,
+                    scan_id=scan_id,
+                )
                 return True
         except Exception as e:
             print(f"⚠️  Create service relationship failed: {e}")
             return False
-        
-        except Exception as e:
-            print(f"⚠️  Clear graph failed: {e}")
     
     async def export_graph(self, format: str, scan_id: Optional[str] = None) -> Dict[str, Any]:
         """Export graph in various formats"""
@@ -337,27 +458,24 @@ class GraphService:
         """Return mock graph data when Neo4j is unavailable"""
         return {
             "nodes": [
-                {"id": "host-1", "label": "192.168.1.1", "type": "host", "properties": {}},
-                {"id": "host-2", "label": "192.168.1.42", "type": "host", "properties": {}},
-                {"id": "host-3", "label": "192.168.1.105", "type": "host", "properties": {}},
-                {"id": "port-1", "label": "22/SSH", "type": "port", "properties": {"parent": "host-2"}},
-                {"id": "port-2", "label": "80/HTTP", "type": "port", "properties": {"parent": "host-2"}},
-                {"id": "port-3", "label": "443/HTTPS", "type": "port", "properties": {"parent": "host-3"}},
-                {"id": "port-4", "label": "3306/MySQL", "type": "port", "properties": {"parent": "host-3"}},
-                {"id": "cve-1", "label": "CVE-2024-3094", "type": "cve", "properties": {"severity": "critical"}},
-                {"id": "cve-2", "label": "CVE-2023-44487", "type": "cve", "properties": {"severity": "high"}},
-                {"id": "cve-3", "label": "CVE-2023-3817", "type": "cve", "properties": {"severity": "medium"}},
+                {"id": "net-1", "label": "10.10.0.0/24", "type": "network", "properties": {"cidr": "10.10.0.0/24"}},
+                {"id": "host-1", "label": "10.10.0.11 (juice-shop)", "type": "host", "properties": {"ip": "10.10.0.11", "role": "juice-shop"}},
+                {"id": "host-2", "label": "10.10.0.12 (webgoat)", "type": "host", "properties": {"ip": "10.10.0.12", "role": "webgoat"}},
+                {"id": "port-1", "label": "3000/HTTP", "type": "port", "properties": {"number": 3000, "service": "http", "parent": "host-1"}},
+                {"id": "port-2", "label": "8080/HTTP", "type": "port", "properties": {"number": 8080, "service": "http", "parent": "host-2"}},
+                {"id": "svc-1", "label": "http", "type": "service", "properties": {"name": "http"}},
+                {"id": "cve-1", "label": "CVE-2023-44487", "type": "cve", "properties": {"severity": "high", "cvss": 7.5}},
+                {"id": "cve-2", "label": "CVE-2024-3094", "type": "cve", "properties": {"severity": "critical", "cvss": 10.0}},
             ],
             "edges": [
-                {"from": "host-1", "to": "host-2", "relationship": "CONNECTED", "properties": {}},
-                {"from": "host-1", "to": "host-3", "relationship": "CONNECTED", "properties": {}},
-                {"from": "host-2", "to": "port-1", "relationship": "HAS_PORT", "properties": {}},
+                {"from": "host-1", "to": "net-1", "relationship": "IN_NETWORK", "properties": {}},
+                {"from": "host-2", "to": "net-1", "relationship": "IN_NETWORK", "properties": {}},
+                {"from": "host-1", "to": "port-1", "relationship": "HAS_PORT", "properties": {}},
                 {"from": "host-2", "to": "port-2", "relationship": "HAS_PORT", "properties": {}},
-                {"from": "host-3", "to": "port-3", "relationship": "HAS_PORT", "properties": {}},
-                {"from": "host-3", "to": "port-4", "relationship": "HAS_PORT", "properties": {}},
-                {"from": "port-1", "to": "cve-1", "relationship": "VULNERABLE_TO", "properties": {}},
-                {"from": "port-3", "to": "cve-2", "relationship": "VULNERABLE_TO", "properties": {}},
-                {"from": "port-4", "to": "cve-3", "relationship": "VULNERABLE_TO", "properties": {}},
+                {"from": "port-1", "to": "svc-1", "relationship": "RUNS_SERVICE", "properties": {}},
+                {"from": "port-2", "to": "svc-1", "relationship": "RUNS_SERVICE", "properties": {}},
+                {"from": "host-1", "to": "cve-1", "relationship": "VULNERABLE_TO", "properties": {}},
+                {"from": "host-2", "to": "cve-2", "relationship": "VULNERABLE_TO", "properties": {}},
             ],
             "metadata": {"note": "Mock data - Neo4j not connected"}
         }

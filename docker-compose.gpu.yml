@@ -1,0 +1,15 @@
+# Optional GPU overrides for Ollama (NVIDIA)
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# Requirements:
+#   - NVIDIA GPU + drivers
+#   - Docker Desktop using WSL2 backend
+#   - WSL2 GPU support working (e.g., `nvidia-smi` works inside your WSL distro)
+
+services:
+  ollama:
+    # Docker Compose v2+ supports this field to request all GPUs
+    gpus: all
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility

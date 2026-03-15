@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -10,7 +11,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import settings
-from .guard import validate_scope, validate_safety
+from .guard import split_target_host_port, validate_scope, validate_safety
 
 
 @dataclass
@@ -85,7 +86,10 @@ class CommandExecutor:
         command: str,
         *,
         target: Optional[str] = None,
+        allowed_cidrs: Optional[List[str]] = None,
+        blocked_tokens: Optional[List[str]] = None,
         validate: bool = True,
+        timeout: Optional[int] = None,
     ) -> ExecutionResult:
         """
         Execute a command with safety checks.
@@ -102,7 +106,17 @@ class CommandExecutor:
         if validate:
             # Scope check
             if target:
-                scope_ok, scope_msg = validate_scope(target)
+                scope_ok = False
+                scope_msg = ""
+
+                if allowed_cidrs:
+                    for cidr in allowed_cidrs:
+                        scope_ok, scope_msg = validate_scope(target, cidr)
+                        if scope_ok:
+                            break
+                else:
+                    scope_ok, scope_msg = validate_scope(target)
+
                 if not scope_ok:
                     return ExecutionResult(
                         success=False,
@@ -114,7 +128,7 @@ class CommandExecutor:
                     )
             
             # Safety check
-            safety_ok, safety_msg = validate_safety(command)
+            safety_ok, safety_msg = validate_safety(command, blocked_tokens=blocked_tokens)
             if not safety_ok:
                 return ExecutionResult(
                     success=False,
@@ -140,6 +154,29 @@ class CommandExecutor:
             )
         
         # Step 3: Execute command
+        effective_timeout = int(timeout) if timeout is not None else int(self.timeout)
+        lowered_command = (command or "").lower()
+
+        # Basic nmap normalization to prevent invalid combinations.
+        # The planner occasionally emits both SYN scan (-sS) and connect scan (-sT).
+        if "nmap" in lowered_command:
+            # The agent sometimes suggests non-existent flags like --timeout/--max-time.
+            # We enforce timeouts at the executor level, so strip these to avoid hard failures.
+            command = re.sub(r"\s--max-time(?:\s+\S+)?", "", command)
+            command = re.sub(r"\s--timeout(?:\s+\S+)?", "", command)
+            lowered_command = (command or "").lower()
+
+        if "nmap" in lowered_command and " -ss" in lowered_command and " -st" in lowered_command:
+            # Prefer SYN scan when both are present.
+            command = command.replace(" -sT", "")
+            lowered_command = (command or "").lower()
+        if "nmap" in lowered_command and " -su" in lowered_command:
+            # UDP scans are routinely slower; the default timeout (30s) is too aggressive.
+            effective_timeout = max(effective_timeout, 180)
+        if "nmap" in lowered_command and "--script=vuln" in lowered_command:
+            # NSE vuln scripts + version detection can be slow; allow more time.
+            effective_timeout = max(effective_timeout, 300)
+
         start_time = datetime.utcnow()
         try:
             process = await asyncio.create_subprocess_shell(
@@ -151,7 +188,7 @@ class CommandExecutor:
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(),
-                    timeout=self.timeout
+                    timeout=effective_timeout
                 )
             except asyncio.TimeoutError:
                 process.kill()
@@ -160,9 +197,9 @@ class CommandExecutor:
                 return ExecutionResult(
                     success=False,
                     stdout="",
-                    stderr=f"TIMEOUT: Command exceeded {self.timeout}s",
+                    stderr=f"TIMEOUT: Command exceeded {effective_timeout}s",
                     exit_code=-3,
-                    duration_seconds=self.timeout,
+                    duration_seconds=float(effective_timeout),
                     command=command,
                 )
             
@@ -219,6 +256,8 @@ class CommandExecutor:
         Returns:
             Tuple of (ExecutionResult, ParsedNmapResult or None)
         """
+        target_host, _ = split_target_host_port(target)
+
         # Build command
         cmd_parts = ["nmap", scan_type, timing, "-oX", "-"]
         
@@ -235,12 +274,12 @@ class CommandExecutor:
         if extra_args:
             cmd_parts.extend(extra_args)
         
-        cmd_parts.append(target)
+        cmd_parts.append(target_host)
         
         command = " ".join(cmd_parts)
         
         # Execute
-        result = await self.execute(command, target=target, validate=True)
+        result = await self.execute(command, target=target_host, validate=True)
         
         # Parse XML output if successful
         parsed = None

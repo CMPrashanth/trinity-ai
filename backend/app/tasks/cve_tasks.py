@@ -7,24 +7,26 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
-from celery import shared_task
+
+from ..celery_app import celery
 
 from ..config import settings
 from ..services.cve_feed_service import CVEFeedService
 
 
 def _notify_n8n(payload: Dict[str, Any]) -> None:
-    if not settings.N8N_WEBHOOK_URL:
+    webhook_url = settings.N8N_WEBHOOK_URL_CLEAN
+    if not webhook_url:
         return
 
     try:
         with httpx.Client(timeout=10.0) as client:
-            client.post(settings.N8N_WEBHOOK_URL, json=payload)
+            client.post(webhook_url, json=payload)
     except Exception as exc:  # pragma: no cover - best effort notification
         print(f"⚠️ n8n webhook notification failed: {exc}")
 
 
-@shared_task(name="app.tasks.cve_tasks.sync_cve_feed")
+@celery.task(name="app.tasks.cve_tasks.sync_cve_feed")
 def sync_cve_feed() -> Dict[str, Any]:
     """Periodic CVE sync task executed by Celery worker."""
     service = CVEFeedService()

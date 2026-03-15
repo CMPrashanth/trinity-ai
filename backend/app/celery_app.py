@@ -26,5 +26,12 @@ celery.conf.task_serializer = "json"
 celery.conf.accept_content = ["json"]
 celery.conf.result_serializer = "json"
 
-# Ensure task auto-discovery when worker starts.
-celery.autodiscover_tasks(["app.tasks"])
+# Ensure task discovery when worker starts.
+# Celery's autodiscover expects *packages* and will look for "<pkg>.tasks".
+celery.autodiscover_tasks(["app"])
+
+# Be explicit too, to avoid discovery issues in containerized reload scenarios.
+celery.conf.include = [
+    "app.tasks.cve_tasks",
+    "app.tasks.scan_tasks",
+]

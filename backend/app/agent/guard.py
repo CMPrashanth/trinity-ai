@@ -4,25 +4,59 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from typing import Iterable, Tuple
+from typing import Iterable, Optional, Tuple, Union
 
 from ..config import settings
 
 # Accept IPv4 addresses optionally suffixed with a port (e.g., 10.0.0.5:22)
-_IP_TARGET = re.compile(r"^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})(?::\d{1,5})?$")
+_IP_TARGET = re.compile(r"^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})(?::(?P<port>\d{1,5}))?$")
 
 
-def _parse_target_ip(target: str) -> str:
-    """Extract and validate the IPv4 portion of a scan target string."""
+ParsedTarget = Union[ipaddress.IPv4Address, ipaddress.IPv4Network]
+
+
+def _parse_target(target: str) -> ParsedTarget:
+    """Parse a target as either an IPv4 host or an IPv4 CIDR network."""
 
     candidate = target.strip()
-    match = _IP_TARGET.match(candidate)
-    if not match:
-        raise ValueError("Target must be an IPv4 address optionally followed by a port (e.g., 192.168.1.10 or 192.168.1.10:443).")
 
-    ip_literal = match.group("ip")
-    ipaddress.IPv4Address(ip_literal)  # raises if invalid octets
-    return ip_literal
+    match = _IP_TARGET.match(candidate)
+    if match:
+        ip_literal = match.group("ip")
+        ip = ipaddress.IPv4Address(ip_literal)  # raises if invalid octets
+        return ip
+
+    # Support CIDR notation (e.g., 192.168.1.0/24) - no port supported here.
+    try:
+        return ipaddress.IPv4Network(candidate, strict=False)
+    except ValueError:
+        raise ValueError(
+            "Target must be an IPv4 address optionally followed by a port (e.g., 192.168.1.10 or 192.168.1.10:443) "
+            "or an IPv4 CIDR subnet (e.g., 192.168.1.0/24)."
+        )
+
+
+def split_target_host_port(target: str) -> tuple[str, Optional[int]]:
+    """Split an IPv4 target into host + optional port.
+
+    Examples:
+    - "10.10.0.11" -> ("10.10.0.11", None)
+    - "10.10.0.11:3000" -> ("10.10.0.11", 3000)
+    - "10.10.0.0/24" -> ("10.10.0.0/24", None)
+    """
+
+    candidate = (target or "").strip()
+    match = _IP_TARGET.match(candidate)
+    if match:
+        ip_literal = match.group("ip")
+        port_literal = match.group("port")
+        if port_literal:
+            try:
+                return ip_literal, int(port_literal)
+            except ValueError:
+                return ip_literal, None
+        return ip_literal, None
+    return candidate, None
 
 
 def validate_scope(target: str, subnet: str | None = None) -> Tuple[bool, str]:
@@ -32,14 +66,20 @@ def validate_scope(target: str, subnet: str | None = None) -> Tuple[bool, str]:
     network = ipaddress.IPv4Network(network_cidr, strict=False)
 
     try:
-        ip_literal = _parse_target_ip(target)
+        parsed = _parse_target(target)
     except ValueError as exc:  # malformed address
         return False, str(exc)
 
-    if ipaddress.IPv4Address(ip_literal) in network:
-        return True, "target within scope"
+    if isinstance(parsed, ipaddress.IPv4Address):
+        if parsed in network:
+            return True, "target within scope"
+        return False, f"Target {parsed} not in authorised subnet {network_cidr}."
 
-    return False, f"Target {ip_literal} not in authorised subnet {network_cidr}."
+    # IPv4Network target
+    if parsed.subnet_of(network):
+        return True, "target subnet within scope"
+
+    return False, f"Target subnet {parsed} not within authorised subnet {network_cidr}."
 
 
 def validate_safety(command: str, blocked_tokens: Iterable[str] | None = None) -> Tuple[bool, str]:

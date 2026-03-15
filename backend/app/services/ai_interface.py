@@ -55,7 +55,7 @@ class ServiceIdentification(BaseModel):
 class VulnerabilityFinding(BaseModel):
     """Finding returned by the agent's analysis pipeline."""
 
-    cve: constr(pattern=r"^CVE-\\d{4}-\\d{4,7}$")
+    cve: constr(pattern=r"(?i)^CVE-\d{4}-\d{4,}$")
     title: constr(strip_whitespace=True, min_length=1)
     severity: SeverityLiteral
     cvss: Optional[float] = Field(default=None, ge=0.0, le=10.0)
@@ -67,6 +67,20 @@ class VulnerabilityFinding(BaseModel):
     exploit_available: bool = False
     references: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @validator("cve", pre=True)
+    def _normalize_cve(cls, value: Any) -> str:  # noqa: D401
+        """Normalize CVE IDs (strip, uppercase, extract CVE-YYYY-NNNN...)."""
+
+        if value is None:
+            return value
+
+        text = str(value).strip().upper()
+        # Sometimes upstream sends an NVD URL or extra text; extract the CVE token.
+        import re
+
+        match = re.search(r"CVE-\d{4}-\d{4,}", text)
+        return match.group(0) if match else text
 
     @validator("references", each_item=True)
     def _strip_reference(cls, value: str) -> str:  # noqa: D401

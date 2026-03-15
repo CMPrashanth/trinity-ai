@@ -45,10 +45,28 @@ logs/
 *.log
 npm-debug.log*
 
+# Trinity runtime artifacts (local only)
+backend/chroma_data/
+backend/celerybeat-schedule
+backend/celerybeat.pid
+backend/cve_sync_state.json
+backend/*output*.txt
+backend/nmap_output.txt
+backend/hosts.txt
+backend/services.txt
+backend/banners.txt
+
 # Temporary
 temp/
 tmp/
 *.tmp
+
+# Test/build artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Git
 .git/

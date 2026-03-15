@@ -10,6 +10,8 @@ This module implements the full Trinity architecture:
 
 from __future__ import annotations
 
+import re
+import shlex
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -38,7 +40,7 @@ try:
     from ..services.langgraph_workflow import LangGraphSecurityWorkflow
 except Exception:  # pragma: no cover
     LangGraphSecurityWorkflow = None
-from .guard import validate_scope, validate_safety
+from .guard import split_target_host_port, validate_scope, validate_safety
 from .executor import CommandExecutor, ExecutionResult
 from .planner import AttackPlanner
 
@@ -213,28 +215,62 @@ class TrinityAI(AIInterface):
         all_ports: List[PortDiscovery] = []
         all_services: List[ServiceIdentification] = []
         all_vulns: List[VulnerabilityFinding] = []
+
+        target_host, target_port = split_target_host_port(attack_plan.target)
         
         for i, step in enumerate(attack_plan.steps):
             self._log("info", "Executor", f"Step {i+1}/{len(attack_plan.steps)}: {step.description}")
+
+            command_to_run = self._normalize_command_for_target(
+                step.command,
+                target_host=target_host,
+                target_port=target_port,
+            )
+            tool_name = (command_to_run.strip().split() or ["unknown"])[0]
+
+            if command_to_run != step.command:
+                self._log(
+                    "debug",
+                    "Tool",
+                    f"Normalized command for target {attack_plan.target}",
+                    details=f"before: {step.command}\nafter:  {command_to_run}",
+                )
+
+            self._log("info", "Tool", f"Running {tool_name}", details=command_to_run)
             
             # Execute with potential self-healing
             result = await self._execute_with_healing(
-                step.command,
-                attack_plan.target,
+                command_to_run,
+                target_host,
                 config,
             )
             
             if result.success:
                 self._log("success", "Executor", f"Step {i+1} completed successfully")
+                self._log(
+                    "debug",
+                    "Tool",
+                    f"{tool_name} exit={result.exit_code} duration={result.duration_seconds:.2f}s",
+                    details=(result.stderr or "").strip()[:500] or None,
+                )
                 
                 # Parse Nmap output if applicable
-                if "nmap" in step.command.lower():
-                    hosts, ports, services = self._parse_nmap_output(result.stdout)
+                if "nmap" in command_to_run.lower():
+                    hosts, ports, services = self._parse_nmap_output(
+                        result.stdout,
+                        default_host=target_host,
+                    )
                     all_hosts.extend(hosts)
                     all_ports.extend(ports)
                     all_services.extend(services)
             else:
                 self._log("warning", "Executor", f"Step {i+1} failed", result.stderr)
+                self._log(
+                    "warning",
+                    "Tool",
+                    f"{tool_name} failed exit={result.exit_code}",
+                    details=(result.stderr or "").strip()[:500] or None,
+                )
         
         # Analyze for vulnerabilities using RAG
         if all_services:
@@ -258,8 +294,13 @@ class TrinityAI(AIInterface):
                 vulns = await self._analyze_services_for_vulns(all_services)
                 all_vulns.extend(vulns)
         
-        # Deduplicate hosts
-        unique_hosts = list(set(all_hosts))
+        # Deduplicate hosts. Derive hosts even when Nmap doesn't populate host headers.
+        derived_hosts = set(all_hosts)
+        derived_hosts.update(p.host for p in all_ports if getattr(p, "host", None))
+        derived_hosts.update(s.host for s in all_services if getattr(s, "host", None))
+        if not derived_hosts and target_host:
+            derived_hosts.add(target_host)
+        unique_hosts = list(derived_hosts)
         
         self._log("success", "Observer", 
                   f"Scan complete: {len(unique_hosts)} hosts, {len(all_ports)} ports, {len(all_vulns)} vulnerabilities")
@@ -271,6 +312,61 @@ class TrinityAI(AIInterface):
             vulnerabilities_found=all_vulns,
             execution_logs=self._execution_logs.copy(),
         )
+
+    _IP_WITH_PORT_TOKEN = re.compile(r"\b(?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d{1,5})\b")
+    _IPV4_TOKEN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b")
+    _CIDR_TOKEN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}\b")
+    _NMAP_FLAG_HINT = re.compile(r"(?:^|\s)(?:-s[STUV]|-sC|-A|-O|-Pn|--script\b|-oN\b|-oX\b)")
+
+    def _first_token(self, command: str) -> str:
+        try:
+            parts = shlex.split(command)
+        except Exception:
+            parts = (command or "").strip().split()
+        return parts[0] if parts else ""
+
+    def _command_mentions_target(self, command: str) -> bool:
+        if not command:
+            return False
+        return bool(self._IPV4_TOKEN.search(command) or self._CIDR_TOKEN.search(command))
+
+    def _normalize_command_for_target(self, command: str, *, target_host: str, target_port: Optional[int]) -> str:
+        """Normalize commands when the user provides an IPv4 target with a port.
+
+        Host-only tools like `nmap`, `dig`, and `nslookup` must not receive `ip:port`.
+        HTTP tools like `curl` can keep `host:port`.
+        """
+
+        cmd = (command or "").strip()
+        if not cmd:
+            return cmd
+
+        # Repair common LLM failure mode: emits only flags (e.g., "-sT -p 80")
+        # which the shell treats as an illegal option. If it looks like nmap flags,
+        # prepend "nmap".
+        if cmd.startswith("-") and self._NMAP_FLAG_HINT.search(cmd):
+            cmd = f"nmap {cmd}"
+
+        lowered = cmd.lower().lstrip()
+        host_only_tools = (
+            "nmap",
+            "dig",
+            "nslookup",
+            "whois",
+            "traceroute",
+        )
+
+        if lowered.startswith(host_only_tools):
+            cmd = self._IP_WITH_PORT_TOKEN.sub(lambda m: m.group("ip"), cmd)
+            if target_host and target_port is not None:
+                cmd = cmd.replace(f"{target_host}:{target_port}", target_host)
+
+            # If the command still doesn't mention any host/subnet, append the target host.
+            # This fixes plans that forget to include the target argument.
+            if target_host and not self._command_mentions_target(cmd):
+                cmd = f"{cmd} {target_host}"
+
+        return cmd
     
     async def _execute_with_healing(
         self,
@@ -279,8 +375,13 @@ class TrinityAI(AIInterface):
         config: Dict[str, Any],
     ) -> ExecutionResult:
         """Execute command with self-healing on failure."""
-        
-        result = await self.executor.execute(command, target=target)
+
+        result = await self.executor.execute(
+            command,
+            target=target,
+            allowed_cidrs=config.get("allowed_cidrs"),
+            blocked_tokens=config.get("blocked_commands"),
+        )
         
         if result.success:
             return result
@@ -309,12 +410,27 @@ class TrinityAI(AIInterface):
             
             corrected_cmd = healed.get("corrected_command", "")
             if corrected_cmd:
-                self._log("info", "SelfHeal", f"Trying corrected command", healed.get("diagnosis"))
+                diagnosis = (healed.get("diagnosis") or "").strip()
+                detail_lines = []
+                if diagnosis:
+                    detail_lines.append(f"diagnosis: {diagnosis}")
+                detail_lines.append(f"corrected_command: {corrected_cmd}")
+                self._log(
+                    "info",
+                    "SelfHeal",
+                    "Trying corrected command",
+                    "\n".join(detail_lines)[:800] or None,
+                )
                 
                 # Validate corrected command
                 safety_ok, _ = validate_safety(corrected_cmd)
                 if safety_ok:
-                    return await self.executor.execute(corrected_cmd, target=target)
+                    return await self.executor.execute(
+                        corrected_cmd,
+                        target=target,
+                        allowed_cidrs=config.get("allowed_cidrs"),
+                        blocked_tokens=config.get("blocked_commands"),
+                    )
                 else:
                     self._log("warning", "SelfHeal", "Corrected command blocked by guard")
             
@@ -326,8 +442,35 @@ class TrinityAI(AIInterface):
     def _parse_nmap_output(
         self,
         output: str,
+        *,
+        default_host: Optional[str] = None,
     ) -> tuple[List[str], List[PortDiscovery], List[ServiceIdentification]]:
         """Parse Nmap output (handles both XML and text formats)."""
+
+        def _normalize_service_name(service: str, port: int) -> str:
+            svc = (service or "").strip().lower().rstrip("?;,")
+
+            preferred: Optional[str] = None
+            if port in {443, 8443}:
+                preferred = "https"
+            elif port in {80, 3000, 8080}:
+                preferred = "http"
+
+            if not preferred:
+                return svc or "unknown"
+
+            if svc in {"http", "https"}:
+                return svc
+
+            if svc in {"unknown", "ppp", "http-proxy", "tcpwrapped"}:
+                return preferred
+
+            if preferred == "http" and svc in {"http-alt", "webcache"}:
+                return "http"
+            if preferred == "https" and svc in {"ssl/http", "https-alt", "ssl", "tls"}:
+                return "https"
+
+            return svc or preferred
         
         hosts = []
         ports = []
@@ -345,48 +488,74 @@ class TrinityAI(AIInterface):
             
             for p in parsed.ports:
                 if p.get("state") == "open":
+                    host_value = (p.get("host") or default_host or "").strip()
+                    port_value = int(p.get("port") or 0)
+                    raw_service_value = (p.get("service") or "").strip() or "unknown"
+                    if not host_value or port_value <= 0:
+                        continue
+
+                    service_value = _normalize_service_name(raw_service_value, port_value)
                     ports.append(PortDiscovery(
-                        host=p.get("host", ""),
-                        port=p.get("port", 0),
-                        service=p.get("service", "unknown"),
+                        host=host_value,
+                        port=port_value,
+                        service=service_value,
                         version=p.get("version"),
                     ))
             
             for s in parsed.services:
+                host_value = (s.get("host") or default_host or "").strip()
+                port_value = int(s.get("port") or 0)
+                raw_service_value = (s.get("service") or "").strip()
+                if not host_value or not raw_service_value:
+                    continue
+
+                service_value = _normalize_service_name(raw_service_value, port_value) if port_value > 0 else (raw_service_value or "unknown")
                 services.append(ServiceIdentification(
-                    host=s.get("host", ""),
-                    service=s.get("service", ""),
+                    host=host_value,
+                    service=service_value,
                     banner=s.get("banner"),
                     metadata={
+                        "port": port_value,
+                        "nmap_service": raw_service_value,
                         "product": s.get("product", ""),
                         "version": s.get("version", ""),
                     },
                 ))
         else:
             # Basic text parsing fallback
-            import re
-            
-            # Find hosts
-            ip_pattern = r"Nmap scan report for (\d+\.\d+\.\d+\.\d+)"
-            for match in re.finditer(ip_pattern, output):
-                hosts.append(match.group(1))
-            
-            # Find open ports
-            port_pattern = r"(\d+)/(\w+)\s+open\s+(\S+)"
-            current_host = hosts[-1] if hosts else ""
-            for match in re.finditer(port_pattern, output):
-                port_num = int(match.group(1))
-                service_name = match.group(3)
-                ports.append(PortDiscovery(
-                    host=current_host,
-                    port=port_num,
-                    service=service_name,
-                ))
-                services.append(ServiceIdentification(
-                    host=current_host,
-                    service=service_name,
-                    metadata={"port": port_num},
-                ))
+            current_host = (default_host or "").strip()
+            ip_pattern = re.compile(r"Nmap scan report for (\d+\.\d+\.\d+\.\d+)")
+            port_pattern = re.compile(r"(?P<port>\d+)/(?:tcp|udp)\s+open\s+(?P<service>\S+)")
+
+            for line in output.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+
+                host_match = ip_pattern.search(line)
+                if host_match:
+                    current_host = host_match.group(1).strip()
+                    if current_host:
+                        hosts.append(current_host)
+                    continue
+
+                port_match = port_pattern.search(line)
+                if port_match:
+                    if not current_host:
+                        continue
+                    port_num = int(port_match.group("port"))
+                    raw_service_name = port_match.group("service").strip() or "unknown"
+                    service_name = _normalize_service_name(raw_service_name, port_num)
+                    ports.append(PortDiscovery(
+                        host=current_host,
+                        port=port_num,
+                        service=service_name,
+                    ))
+                    services.append(ServiceIdentification(
+                        host=current_host,
+                        service=service_name,
+                        metadata={"port": port_num, "nmap_service": raw_service_name},
+                    ))
         
         return hosts, ports, services
     
@@ -396,7 +565,7 @@ class TrinityAI(AIInterface):
     ) -> List[VulnerabilityFinding]:
         """Use RAG to find potential vulnerabilities for discovered services."""
         
-        vulnerabilities = []
+        vulnerabilities: List[VulnerabilityFinding] = []
         
         for svc in services:
             # Build search query from service info
@@ -414,18 +583,44 @@ class TrinityAI(AIInterface):
                 )
                 
                 for cve in cves:
-                    if cve.get("cve_id"):
-                        vulnerabilities.append(VulnerabilityFinding(
-                            cve=cve["cve_id"],
-                            title=cve.get("title", f"Potential vulnerability in {svc.service}"),
-                            severity=cve.get("severity", "medium"),
-                            cvss=cve.get("cvss"),
-                            target=svc.host,
-                            port=str(svc.metadata.get("port", "")),
-                            service=svc.service,
-                            description=cve.get("description"),
-                            references=cve.get("references", []),
-                        ))
+                    cve_id = cve.get("cve_id")
+                    if not cve_id:
+                        continue
+
+                    metadata = cve.get("metadata") if isinstance(cve.get("metadata"), dict) else {}
+                    severity = (metadata.get("severity") or cve.get("severity") or "medium")
+
+                    cvss_value = metadata.get("cvss") or cve.get("cvss")
+                    cvss: Optional[float] = None
+                    try:
+                        if cvss_value is not None and cvss_value != "":
+                            cvss = float(cvss_value)
+                    except Exception:
+                        cvss = None
+
+                    description = cve.get("description")
+                    title = (
+                        metadata.get("title")
+                        or cve.get("title")
+                        or (str(description).split(" - ", 1)[0] if description else None)
+                        or f"Potential vulnerability in {svc.service}"
+                    )
+
+                    vulnerabilities.append(VulnerabilityFinding(
+                        cve=cve_id,
+                        title=title,
+                        severity=severity,
+                        cvss=cvss,
+                        target=svc.host,
+                        port=str(svc.metadata.get("port", "")),
+                        service=svc.service,
+                        description=description,
+                        references=cve.get("references", []),
+                        metadata={
+                            "source": "rag",
+                            "similarity_score": cve.get("similarity_score"),
+                        },
+                    ))
             except Exception as e:
                 self._log("warning", "RAG", f"CVE lookup failed for {svc.service}: {e}")
         
@@ -515,12 +710,27 @@ class TrinityAI(AIInterface):
         """Persist scan results to Neo4j graph database."""
         
         try:
+            scope_cidr = getattr(settings, "SCOPE_SUBNET", "")
+            if scope_cidr:
+                await self.graph_service.create_network_node(
+                    cidr=scope_cidr,
+                    scan_id=scan_id,
+                    name=f"Lab Network {scope_cidr}",
+                )
+
             # Create host nodes
             for host_ip in scan_result.hosts_discovered:
                 await self.graph_service.create_host_node(
                     ip=host_ip,
                     scan_id=scan_id,
                 )
+
+                if scope_cidr:
+                    await self.graph_service.connect_host_to_network(
+                        cidr=scope_cidr,
+                        host_ip=host_ip,
+                        scan_id=scan_id,
+                    )
             
             # Create port and service relationships
             for port in scan_result.ports_discovered:
@@ -531,6 +741,15 @@ class TrinityAI(AIInterface):
                     version=port.version,
                     scan_id=scan_id,
                 )
+
+                if port.service:
+                    await self.graph_service.create_service_relationship(
+                        host_ip=port.host,
+                        port=port.port,
+                        service_name=port.service,
+                        banner=port.version,
+                        scan_id=scan_id,
+                    )
             
             # Create vulnerability relationships
             for vuln in scan_result.vulnerabilities_found:

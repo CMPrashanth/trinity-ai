@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { Settings as SettingsIcon, Database, Brain, Shield, Bell, Save, RotateCcw, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { settingsAPI, Settings } from "@/lib/api";
+import { cvesAPI, settingsAPI, Settings } from "@/lib/api";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 
 export default function SettingsPage() {
@@ -68,6 +68,66 @@ export default function SettingsPage() {
       toast({
         title: "Save Failed",
         description: `Could not save settings: ${error.message}`,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const testN8nMutation = useMutation({
+    mutationFn: settingsAPI.testN8n,
+    onSuccess: (data) => {
+      toast({
+        title: "n8n Connected",
+        description: data?.message || "Test event sent to n8n.",
+      });
+    },
+    onError: (error: any) => {
+      const detail = error?.response?.data?.detail;
+      toast({
+        title: "n8n Test Failed",
+        description: `Could not send test event: ${detail || error.message}`,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const { data: chromaStatus, isFetching: isChromaFetching, refetch: refetchChromaStatus } = useQuery({
+    queryKey: ["chroma", "status"],
+    queryFn: cvesAPI.status,
+  });
+
+  const seedDemoMutation = useMutation({
+    mutationFn: (reset: boolean) => cvesAPI.seedDemo(reset),
+    onSuccess: (data) => {
+      toast({
+        title: "CVE Knowledge Base Seeded",
+        description: `Added ${data.added} CVEs (total: ${data.count}).`,
+      });
+      refetchChromaStatus();
+    },
+    onError: (error: any) => {
+      const detail = error?.response?.data?.detail;
+      toast({
+        title: "Seed Failed",
+        description: detail || error.message || "Could not seed demo CVEs.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const syncCvesMutation = useMutation({
+    mutationFn: settingsAPI.syncCvesNow,
+    onSuccess: (data) => {
+      toast({
+        title: "CVE Sync Queued",
+        description: data?.taskId ? `Task queued: ${data.taskId}` : (data?.message || "CVE sync task queued."),
+      });
+    },
+    onError: (error: any) => {
+      const detail = error?.response?.data?.detail;
+      toast({
+        title: "CVE Sync Failed",
+        description: detail || error.message || "Could not queue CVE sync task.",
         variant: "destructive",
       });
     },
@@ -266,6 +326,42 @@ export default function SettingsPage() {
                   <CardDescription>Configuration for RAG and vulnerability lookups</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4 pt-6">
+                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 p-4 rounded-lg border border-border bg-muted/30">
+                    <div>
+                      <Label className="text-base">CVE Knowledge Base</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Status: {chromaStatus?.status || (isChromaFetching ? "checking..." : "unknown")}
+                        {typeof chromaStatus?.count === "number" ? ` • Records: ${chromaStatus.count}` : ""}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => seedDemoMutation.mutate(false)}
+                        disabled={seedDemoMutation.isPending}
+                      >
+                        {seedDemoMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                        Seed Demo CVEs
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => syncCvesMutation.mutate()}
+                        disabled={syncCvesMutation.isPending}
+                      >
+                        {syncCvesMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                        Sync CVEs Now
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={() => refetchChromaStatus()}
+                        disabled={isChromaFetching}
+                      >
+                        {isChromaFetching ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                        Refresh
+                      </Button>
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <Label>Database Path</Label>
                     <Input
@@ -322,6 +418,22 @@ export default function SettingsPage() {
                 <CardDescription>Configure how and when you receive alerts</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 pt-6">
+                <div className="flex items-center justify-between p-4 rounded-lg border border-border">
+                  <div>
+                    <Label className="text-base">n8n Webhook</Label>
+                    <p className="text-xs text-muted-foreground">Send a test event to verify workflow connection</p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => testN8nMutation.mutate()}
+                    disabled={testN8nMutation.isPending}
+                  >
+                    {testN8nMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : null}
+                    Test Connection
+                  </Button>
+                </div>
                 <div className="flex items-center justify-between p-4 rounded-lg border border-border">
                   <div>
                     <Label className="text-base">Email Alerts</Label>

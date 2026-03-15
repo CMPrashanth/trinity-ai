@@ -13,13 +13,14 @@ from ..config import settings
 # System prompts for different planning modes
 PLANNER_SYSTEM_PROMPT = """You are Trinity, an expert penetration testing AI agent. Your role is to generate safe, effective, and scope-compliant attack plans.
 
-YOUR AVAILABLE ARSENAL (You MUST only use these tools):
-- Active Recon: nmap (TCP/UDP/NSE), masscan, arp-scan
-- Passive Recon / Auth: whois, dig, nslookup, traceroute
-- Web Enum: nikto, dirb, dirbuster, wfuzz, gobuster, sslscan, whatweb, curl, wget
+YOUR AVAILABLE ARSENAL (You MUST only use these tools, which are installed in the backend container):
+- Active Recon: nmap (TCP/UDP/NSE)
+- Passive Recon: whois, dig, nslookup, traceroute
+- Web/HTTP Enum: curl, wget, whatweb, dirb, gobuster, wfuzz
+- TLS/SSL: sslscan
 - Connectors & Proxies: netcat (nc), socat, proxychains
-- Network Protocols: smbclient, smbmap, enum4linux, snmpwalk, snmp-check
-- Vuln Scanning: sqlmap, hydra, medusa, crackmapexec
+- Network Protocols: smbclient, snmpwalk
+- Vulnerability Scanning: sqlmap, hydra
 
 CRITICAL RULES:
 1. NEVER use -T5 timing (aggressive) - maximum allowed is -T4
@@ -35,7 +36,7 @@ QUICK_SCAN_PROMPT = """Generate a QUICK reconnaissance plan for target: {target}
 
 Focus on:
 - Fast host discovery
-- Top 100 most common ports only
+- Scan common ports quickly (include 1-1024 plus common web/app ports like 3000, 8080, 8443)
 - Service version detection
 - Quick banner grabbing
 
@@ -181,7 +182,7 @@ class AttackPlanner:
             )
             
             # Parse response into AttackPlan
-            return self._parse_plan_response(response, target)
+            return self._parse_plan_response(response, target, scan_profile=scan_profile)
             
         except Exception as e:
             # Fallback to deterministic plan if LLM fails
@@ -231,7 +232,7 @@ class AttackPlanner:
         except Exception as e:
             raise RuntimeError(f"Self-heal generation failed: {e}")
     
-    def _parse_plan_response(self, response: Dict[str, Any], target: str) -> AttackPlan:
+    def _parse_plan_response(self, response: Dict[str, Any], target: str, *, scan_profile: str) -> AttackPlan:
         """Parse LLM response into AttackPlan model."""
         
         steps = []
@@ -251,6 +252,9 @@ class AttackPlanner:
                 command=f"nmap -sV -T4 {target}",
                 description="Default service scan",
             )]
+
+        if scan_profile == "quick":
+            steps = self._normalize_quick_plan(steps, target)
         
         return AttackPlan(
             target=response.get("target", target),
@@ -258,6 +262,41 @@ class AttackPlanner:
             reasoning=response.get("reasoning", "LLM-generated plan"),
             estimated_duration=response.get("estimated_duration", "~5 minutes"),
         )
+
+    def _normalize_quick_plan(self, steps: List[PlanStep], target: str) -> List[PlanStep]:
+        """Ensure QUICK plans don't miss common lab/web ports in container networks."""
+
+        normalized: List[PlanStep] = []
+        port_list = "1-1024,3000,8080,8443"
+
+        for step in steps:
+            command = (step.command or "").strip()
+            lowered = command.lower()
+
+            if lowered.startswith("nmap"):
+                # Ensure we don't rely on ping probes in docker networks.
+                if " -pn" not in lowered and " -sn" not in lowered:
+                    command = f"{command} -Pn"
+                    lowered = command.lower()
+
+                # If the command is overly narrow (top-100 / 1-100), widen it.
+                # Also, if it doesn't specify ports at all, pick a safe, fast set.
+                has_explicit_ports = (" -p " in lowered) or ("--top-ports" in lowered) or (" -p-" in lowered)
+                if "--top-ports" in lowered and "--top-ports 100" in lowered:
+                    command = command.replace("--top-ports 100", f"-p {port_list}")
+                elif "-p 1-100" in lowered or "-p1-100" in lowered:
+                    command = command.replace("-p 1-100", f"-p {port_list}").replace("-p1-100", f"-p {port_list}")
+                elif not has_explicit_ports:
+                    command = f"{command} -p {port_list}"
+
+            normalized.append(PlanStep(
+                command=command,
+                description=step.description,
+                rationale=step.rationale,
+                metadata=step.metadata,
+            ))
+
+        return normalized
     
     def _fallback_plan(self, target: str, scan_profile: str) -> AttackPlan:
         """Generate a deterministic fallback plan when LLM is unavailable."""
@@ -265,14 +304,9 @@ class AttackPlanner:
         if scan_profile == "quick":
             steps = [
                 PlanStep(
-                    command=f"nmap -sn {target}",
-                    description="Host discovery ping scan",
-                    rationale="Identify live hosts before port scanning",
-                ),
-                PlanStep(
-                    command=f"nmap -sV -T4 --top-ports 100 {target}",
-                    description="Quick service detection on top 100 ports",
-                    rationale="Fast identification of common services",
+                    command=f"nmap -sT -sV -T4 -Pn -p 1-1024,3000,8080,8443 {target}",
+                    description="Quick service detection on common ports (incl. web/app ports)",
+                    rationale="Avoid missing lab/web services that run on 3000/8080/8443",
                 ),
             ]
             duration = "~2-5 minutes"
@@ -339,7 +373,7 @@ class AttackPlanner:
         
         return AttackPlan(
             target=target,
-            steps=steps,
+            steps=self._normalize_quick_plan(steps, target) if scan_profile == "quick" else steps,
             reasoning=f"Fallback {scan_profile} plan (LLM unavailable)",
             estimated_duration=duration,
         )

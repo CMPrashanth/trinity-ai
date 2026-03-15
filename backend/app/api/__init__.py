@@ -1,6 +1,6 @@
 """API routes package"""
 
-from . import auth, scans, vulnerabilities, graph, logs, settings, dashboard, agent
+from . import auth, scans, vulnerabilities, graph, logs, settings, dashboard, agent, cves
 
 __all__ = [
 	"auth",
@@ -9,6 +9,7 @@ __all__ = [
 	"graph",
 	"logs",
 	"settings",
+	"cves",
 	"dashboard",
 	"agent",
 ]

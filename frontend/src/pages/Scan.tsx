@@ -55,7 +55,7 @@ export default function ScanPage() {
 
 	const createScanMutation = useMutation({
 		mutationFn: (data: ScanCreate) => scansAPI.create(data),
-		onSuccess: () => {
+		onSuccess: (scan) => {
 			queryClient.invalidateQueries({ queryKey: ["scans", "recent"] });
 			toast({
 				title: "Scan Initiated",
@@ -69,7 +69,8 @@ export default function ScanPage() {
 				graphMemory: true,
 				autoHeal: true,
 			});
-			navigate("/");
+			// Jump to live logs for this scan so the operator can observe Planner/Guard/Executor output.
+			navigate(`/logs?scan_id=${scan.id}`);
 		},
 		onError: (error: any) => {
 			toast({

@@ -77,6 +77,69 @@ class CVEFeedService:
             "severity_breakdown": severities,
         }
 
+    async def search_by_keywords(
+        self,
+        keywords: List[str],
+        *,
+        per_keyword: int = 20,
+        max_total: int = 200,
+        extra_metadata: Dict[str, Any] | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch CVEs from NVD using keywordSearch and return normalized records.
+
+        This is used for lab/demo seeding so we can populate Chroma with *real* CVEs
+        without inventing IDs.
+        """
+
+        normalized: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        headers: Dict[str, str] = {}
+        if settings.NVD_API_KEY:
+            headers["apiKey"] = settings.NVD_API_KEY
+
+        extra_metadata = dict(extra_metadata or {})
+
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            for kw in [k.strip() for k in keywords if str(k).strip()]:
+                if len(normalized) >= max_total:
+                    break
+
+                params = {
+                    "resultsPerPage": min(int(per_keyword), 2000),
+                    "startIndex": 0,
+                    "keywordSearch": kw,
+                }
+
+                response = await client.get(settings.NVD_BASE_URL, params=params, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+
+                vulnerabilities = payload.get("vulnerabilities", [])
+                for item in vulnerabilities:
+                    if len(normalized) >= max_total:
+                        break
+
+                    record = self._normalize_record(item)
+                    if not record:
+                        continue
+
+                    cve_id = record.get("cve_id")
+                    if not cve_id or cve_id in seen:
+                        continue
+
+                    seen.add(cve_id)
+
+                    md = dict(record.get("metadata", {}) or {})
+                    md.update(extra_metadata)
+                    md.setdefault("seed", "lab")
+                    md.setdefault("keyword", kw)
+                    record["metadata"] = md
+
+                    normalized.append(record)
+
+        return normalized
+
     def _normalize_record(self, item: Dict[str, Any]) -> Dict[str, Any] | None:
         cve = item.get("cve", {})
         cve_id = cve.get("id")

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Layout } from "@/components/layout/Layout";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import { logsAPI } from "@/lib/api";
 import { format } from "date-fns";
 import { useDebounce } from "@/hooks/use-debounce";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { useLocation, useNavigate } from "react-router-dom";
 
 const levelConfig: Record<string, { icon: React.ElementType; color: string; bgColor: string }> = {
   info: { icon: Activity, color: "text-accent", bgColor: "bg-accent/10" },
@@ -21,9 +22,25 @@ const levelConfig: Record<string, { icon: React.ElementType; color: string; bgCo
   error: { icon: XCircle, color: "text-destructive", bgColor: "bg-destructive/10" },
 };
 
-const logComponents = ["Planner", "Guard", "Executor", "Observer", "Self-Heal", "RAG", "Circuit Breaker", "Main"];
+const logComponents = [
+  "System",
+  "Planner",
+  "Guard",
+  "Executor",
+  "Tool",
+  "Observer",
+  "RAG",
+  "SelfHeal",
+  "LangChain",
+  "LangGraph",
+  "Circuit Breaker",
+  "Main",
+];
 
 export default function LogsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebounce(searchQuery, 300);
   const [levelFilter, setLevelFilter] = useState<string>("all");
@@ -31,21 +48,37 @@ export default function LogsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
+  const scanIdFromUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const raw = params.get("scan_id");
+    if (!raw) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : undefined;
+  }, [location.search]);
+
   const { data, isLoading, isRefetching, refetch } = useQuery({
-    queryKey: ["logs", currentPage, debouncedSearch, levelFilter, componentFilter],
+    queryKey: ["logs", currentPage, debouncedSearch, levelFilter, componentFilter, scanIdFromUrl],
     queryFn: () => logsAPI.list({
       skip: (currentPage - 1) * itemsPerPage,
       limit: itemsPerPage,
       search: debouncedSearch,
       level: levelFilter !== "all" ? levelFilter : undefined,
       component: componentFilter !== "all" ? componentFilter : undefined,
+      scan_id: scanIdFromUrl,
     }),
     placeholderData: (previousData) => previousData,
+    // When viewing a specific scan, keep updating while it runs.
+    refetchInterval: scanIdFromUrl ? 2000 : false,
   });
 
   const logs = data?.logs || [];
   const totalCount = data?.total || 0;
   const totalPages = Math.ceil(totalCount / itemsPerPage);
+
+  // If scan_id is present in URL, keep pagination stable when filters change.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, levelFilter, componentFilter, scanIdFromUrl]);
 
   const handlePageChange = (page: number) => {
     if (page >= 1 && page <= totalPages) {
@@ -57,8 +90,8 @@ export default function LogsPage() {
     <Layout>
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col items-center gap-4 mb-6 text-center">
+          <div className="flex items-center gap-3 justify-center">
             <div className="p-2 rounded-lg bg-muted border border-border">
               <FileText className="h-6 w-6 text-foreground" />
             </div>
@@ -70,11 +103,21 @@ export default function LogsPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-center gap-2 flex-wrap">
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isRefetching}>
               {isRefetching ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
               Refresh
             </Button>
+            {scanIdFromUrl ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate("/logs")}
+                className="text-xs"
+              >
+                Clear Scan Filter
+              </Button>
+            ) : null}
             <Button variant="default" size="sm">
               <Download className="h-4 w-4 mr-2" />
               Export Logs
@@ -83,7 +126,7 @@ export default function LogsPage() {
         </div>
 
         <Tabs defaultValue="timeline" className="space-y-6">
-          <TabsList>
+          <TabsList className="mx-auto">
             <TabsTrigger value="timeline">Timeline View</TabsTrigger>
             <TabsTrigger value="terminal">Terminal View</TabsTrigger>
           </TabsList>
@@ -147,7 +190,6 @@ export default function LogsPage() {
                           config.bgColor,
                           log.level === "error" ? "border-destructive/30" : "border-border"
                         )}
-                        style={{ animationDelay: `${index * 30}ms` }}
                       >
                         <div className={cn("p-2 rounded-lg h-fit", config.bgColor)}>
                           <Icon className={cn("h-4 w-4", config.color)} />

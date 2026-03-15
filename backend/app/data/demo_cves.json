@@ -1,0 +1,123 @@
+[
+  {
+    "cve_id": "CVE-2021-44228",
+    "description": "Apache Log4j2 (Log4Shell) remote code execution risk via JNDI message lookups under certain configurations.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2021,
+      "tags": ["java", "logging", "rce"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-44228"]
+    }
+  },
+  {
+    "cve_id": "CVE-2014-0160",
+    "description": "OpenSSL Heartbleed information disclosure vulnerability that can leak memory contents from affected systems.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2014,
+      "tags": ["openssl", "tls", "info-disclosure"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2014-0160"]
+    }
+  },
+  {
+    "cve_id": "CVE-2014-6271",
+    "description": "GNU Bash Shellshock vulnerability enabling command injection via crafted environment variables in affected setups.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2014,
+      "tags": ["bash", "command-injection"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2014-6271"]
+    }
+  },
+  {
+    "cve_id": "CVE-2017-0144",
+    "description": "Microsoft SMBv1 vulnerability (EternalBlue class) that enabled remote compromise in unpatched Windows systems.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2017,
+      "tags": ["windows", "smb", "rce"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2017-0144"]
+    }
+  },
+  {
+    "cve_id": "CVE-2016-5195",
+    "description": "Linux kernel Dirty COW privilege escalation vulnerability (race condition in copy-on-write).",
+    "metadata": {
+      "severity": "high",
+      "year": 2016,
+      "tags": ["linux", "privilege-escalation"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2016-5195"]
+    }
+  },
+  {
+    "cve_id": "CVE-2019-0708",
+    "description": "Microsoft Remote Desktop Services (BlueKeep) remote code execution risk on unpatched systems.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2019,
+      "tags": ["windows", "rdp", "rce"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2019-0708"]
+    }
+  },
+  {
+    "cve_id": "CVE-2022-22965",
+    "description": "Spring Framework (Spring4Shell) remote code execution risk under specific deployment conditions.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2022,
+      "tags": ["java", "spring", "rce"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2022-22965"]
+    }
+  },
+  {
+    "cve_id": "CVE-2023-44487",
+    "description": "HTTP/2 Rapid Reset: denial of service technique impacting vulnerable HTTP/2 implementations.",
+    "metadata": {
+      "severity": "high",
+      "year": 2023,
+      "tags": ["http2", "dos"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-44487"]
+    }
+  },
+  {
+    "cve_id": "CVE-2024-3094",
+    "description": "XZ Utils supply-chain backdoor in certain releases affecting liblzma usage paths.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2024,
+      "tags": ["supply-chain", "xz", "backdoor"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2024-3094"]
+    }
+  },
+  {
+    "cve_id": "CVE-2021-41773",
+    "description": "Apache HTTP Server path traversal / file disclosure under certain configurations (2.4.49).",
+    "metadata": {
+      "severity": "high",
+      "year": 2021,
+      "tags": ["apache", "path-traversal"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-41773"]
+    }
+  },
+  {
+    "cve_id": "CVE-2020-1472",
+    "description": "Netlogon Elevation of Privilege (Zerologon) allowing domain compromise on vulnerable setups.",
+    "metadata": {
+      "severity": "critical",
+      "year": 2020,
+      "tags": ["windows", "active-directory", "privilege-escalation"],
+      "source": "demo",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2020-1472"]
+    }
+  }
+]

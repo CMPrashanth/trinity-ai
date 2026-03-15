@@ -1,16 +1,20 @@
 """ChromaDB vector database service for RAG"""
 
 from typing import List, Dict, Any, Optional
+from pathlib import Path
+import json
 from ..config import settings
 
 # Make chromadb optional - use fallback data if not installed
 try:
     import chromadb
     from chromadb.config import Settings as ChromaSettings
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
     CHROMADB_AVAILABLE = True
 except ImportError:
     chromadb = None
     ChromaSettings = None
+    SentenceTransformerEmbeddingFunction = None
     CHROMADB_AVAILABLE = False
     print("⚠️  chromadb not installed - using fallback CVE data")
 
@@ -21,6 +25,7 @@ class VectorService:
     def __init__(self):
         self.client = None
         self.collection = None
+        self.embedding_function = None
         self._connect()
     
     def _connect(self):
@@ -30,6 +35,12 @@ class VectorService:
             return
             
         try:
+            # Make embeddings explicit so query/upsert don't silently fail.
+            if SentenceTransformerEmbeddingFunction is not None:
+                self.embedding_function = SentenceTransformerEmbeddingFunction(
+                    model_name=settings.CHROMA_EMBEDDING_MODEL
+                )
+
             # Try to connect to ChromaDB server
             self.client = chromadb.HttpClient(
                 host=settings.CHROMA_HOST,
@@ -39,7 +50,8 @@ class VectorService:
             # Get or create collection for CVE data
             self.collection = self.client.get_or_create_collection(
                 name="cve_knowledge_base",
-                metadata={"description": "CVE vulnerability knowledge base for RAG"}
+                metadata={"description": "CVE vulnerability knowledge base for RAG"},
+                embedding_function=self.embedding_function,
             )
             
             print("✅ Connected to ChromaDB")
@@ -49,15 +61,13 @@ class VectorService:
             print("   Falling back to persistent client")
             
             try:
-                # Fallback to persistent client
-                self.client = chromadb.Client(ChromaSettings(
-                    chroma_db_impl="duckdb+parquet",
-                    persist_directory=settings.CHROMA_PERSIST_DIR
-                ))
+                # Fallback to local persistent client (modern API)
+                self.client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
                 
                 self.collection = self.client.get_or_create_collection(
                     name="cve_knowledge_base",
-                    metadata={"description": "CVE vulnerability knowledge base for RAG"}
+                    metadata={"description": "CVE vulnerability knowledge base for RAG"},
+                    embedding_function=self.embedding_function,
                 )
                 
                 print("✅ Using ChromaDB persistent client")
@@ -65,6 +75,33 @@ class VectorService:
             except Exception as e2:
                 print(f"⚠️  ChromaDB persistent client failed: {e2}")
                 print("   RAG features will use fallback data")
+
+    @staticmethod
+    def _sanitize_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Chroma metadata values must be primitives (str/int/float/bool).
+
+        The NVD feed and our demo seeds include lists/dicts (e.g., references/tags).
+        We stringify those to keep the data usable for filtering/debugging.
+        """
+
+        if not metadata:
+            return {}
+
+        sanitized: Dict[str, Any] = {}
+        for key, value in metadata.items():
+            if value is None:
+                continue
+
+            if isinstance(value, (str, int, float, bool)):
+                sanitized[str(key)] = value
+                continue
+
+            try:
+                sanitized[str(key)] = json.dumps(value, ensure_ascii=False)
+            except Exception:
+                sanitized[str(key)] = str(value)
+
+        return sanitized
     
     async def add_cve_data(
         self,
@@ -80,7 +117,7 @@ class VectorService:
         try:
             self.collection.upsert(
                 documents=[description],
-                metadatas=[metadata or {}],
+                metadatas=[self._sanitize_metadata(metadata)],
                 ids=[cve_id]
             )
             print(f"✅ Added {cve_id} to vector database")
@@ -108,21 +145,37 @@ class VectorService:
             results = self.collection.query(
                 query_texts=[query],
                 n_results=n_results,
-                where=filter_metadata
+                where=filter_metadata,
             )
-            
-            # Format results
-            cves = []
-            for i in range(len(results['ids'][0])):
+
+            ids = (results or {}).get("ids") or []
+            docs = (results or {}).get("documents") or []
+            distances = (results or {}).get("distances") or []
+            metadatas = (results or {}).get("metadatas") or []
+
+            first_ids = ids[0] if isinstance(ids, list) and ids else []
+            if not first_ids:
+                return self._get_fallback_cves(query)
+
+            first_docs = docs[0] if isinstance(docs, list) and docs else []
+            first_distances = distances[0] if isinstance(distances, list) and distances else []
+            first_metadatas = metadatas[0] if isinstance(metadatas, list) and metadatas else []
+
+            cves: List[Dict[str, Any]] = []
+            for i, cve_id in enumerate(first_ids):
                 cves.append({
-                    "cve_id": results['ids'][0][i],
-                    "description": results['documents'][0][i],
-                    "similarity_score": 1.0 - results['distances'][0][i] if 'distances' in results else 0.9,
-                    "metadata": results['metadatas'][0][i] if 'metadatas' in results else {}
+                    "cve_id": cve_id,
+                    "description": first_docs[i] if i < len(first_docs) else "",
+                    "similarity_score": (
+                        1.0 - first_distances[i]
+                        if i < len(first_distances) and isinstance(first_distances[i], (int, float))
+                        else 0.9
+                    ),
+                    "metadata": first_metadatas[i] if i < len(first_metadatas) else {},
                 })
-            
+
             return cves
-            
+
         except Exception as e:
             print(f"⚠️  CVE search failed: {e}")
             return self._get_fallback_cves(query)
@@ -136,7 +189,7 @@ class VectorService:
         try:
             ids = [cve['cve_id'] for cve in cve_list]
             documents = [cve['description'] for cve in cve_list]
-            metadatas = [cve.get('metadata', {}) for cve in cve_list]
+            metadatas = [self._sanitize_metadata(cve.get('metadata', {})) for cve in cve_list]
             
             self.collection.upsert(
                 ids=ids,
@@ -191,9 +244,10 @@ class VectorService:
         
         try:
             self.client.delete_collection("cve_knowledge_base")
-            self.collection = self.client.create_collection(
+            self.collection = self.client.get_or_create_collection(
                 name="cve_knowledge_base",
-                metadata={"description": "CVE vulnerability knowledge base for RAG"}
+                metadata={"description": "CVE vulnerability knowledge base for RAG"},
+                embedding_function=self.embedding_function,
             )
             print("🧹 Cleared CVE vector database")
             
@@ -276,3 +330,23 @@ class VectorService:
             print("✅ Initialized CVE knowledge base with sample data")
         except Exception as e:
             print(f"⚠️  Knowledge base initialization failed: {e}")
+
+    async def seed_demo_cves(self, reset: bool = False) -> int:
+        """Seed ChromaDB with curated, safe demo CVE metadata."""
+
+        if not self.collection:
+            return 0
+
+        if reset:
+            await self.clear_collection()
+
+        demo_path = Path(__file__).resolve().parents[1] / "data" / "demo_cves.json"
+        if not demo_path.exists():
+            raise FileNotFoundError(f"Demo CVE seed file not found: {demo_path}")
+
+        payload = json.loads(demo_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError("demo_cves.json must be a JSON array")
+
+        await self.bulk_add_cves(payload)
+        return len(payload)

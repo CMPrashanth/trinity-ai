@@ -75,10 +75,13 @@ export interface Scan {
   id: number;
   scan_id: string;
   target: string;
+  scan_type?: string;
   profile: string;
   status: string;
   start_time: string;
   end_time?: string;
+  duration?: string;
+  progress?: number;
   findings: {
     critical: number;
     high: number;
@@ -140,6 +143,21 @@ export interface Log {
   details?: string;
 }
 
+export interface ChromaStatus {
+  status: "ok" | "unavailable";
+  message?: string;
+  collection?: string;
+  count?: number;
+  lastSyncState?: any;
+}
+
+export interface CveSearchResult {
+  cve_id: string;
+  description: string;
+  similarity_score?: number;
+  metadata?: any;
+}
+
 export interface Settings {
   llm_model: string;
   max_retries: number;
@@ -156,6 +174,45 @@ export interface Settings {
   alert_on_critical: boolean;
   alert_on_circuit_break: boolean;
 }
+
+const mapSettingsFromApi = (raw: any): Settings => {
+  const blockedList = raw?.blockedCommands ?? raw?.blocked_commands;
+  return {
+    llm_model: raw?.llmModel ?? raw?.llm_model ?? "",
+    max_retries: raw?.maxRetries ?? raw?.max_retries ?? 3,
+    execution_timeout: raw?.executionTimeout ?? raw?.execution_timeout ?? 30,
+    enable_self_healing: raw?.enableSelfHealing ?? raw?.enable_self_healing ?? true,
+    circuit_breaker_enabled: raw?.circuitBreakerEnabled ?? raw?.circuit_breaker_enabled ?? true,
+    neo4j_uri: raw?.neo4jUri ?? raw?.neo4j_uri ?? "",
+    chroma_db_path: raw?.chromaDbPath ?? raw?.chroma_db_path ?? "",
+    graph_hygiene_enabled: raw?.graphHygieneEnabled ?? raw?.graph_hygiene_enabled ?? true,
+    allowed_subnet: raw?.allowedSubnet ?? raw?.allowed_subnet ?? "",
+    blocked_commands: Array.isArray(blockedList) ? blockedList.join(", ") : (blockedList ?? raw?.blockedCommands ?? ""),
+    email_alerts: raw?.emailAlerts ?? raw?.email_alerts ?? false,
+    slack_integration: raw?.slackIntegration ?? raw?.slack_integration ?? false,
+    alert_on_critical: raw?.alertOnCritical ?? raw?.alert_on_critical ?? true,
+    alert_on_circuit_break: raw?.alertOnCircuitBreak ?? raw?.alert_on_circuit_break ?? true,
+  };
+};
+
+const mapSettingsToApi = (data: Partial<Settings>): Record<string, any> => {
+  const payload: Record<string, any> = {};
+  if (data.llm_model !== undefined) payload.llmModel = data.llm_model;
+  if (data.max_retries !== undefined) payload.maxRetries = data.max_retries;
+  if (data.execution_timeout !== undefined) payload.executionTimeout = data.execution_timeout;
+  if (data.enable_self_healing !== undefined) payload.enableSelfHealing = data.enable_self_healing;
+  if (data.circuit_breaker_enabled !== undefined) payload.circuitBreakerEnabled = data.circuit_breaker_enabled;
+  if (data.neo4j_uri !== undefined) payload.neo4jUri = data.neo4j_uri;
+  if (data.chroma_db_path !== undefined) payload.chromaDbPath = data.chroma_db_path;
+  if (data.graph_hygiene_enabled !== undefined) payload.graphHygieneEnabled = data.graph_hygiene_enabled;
+  if (data.allowed_subnet !== undefined) payload.allowedSubnet = data.allowed_subnet;
+  if (data.blocked_commands !== undefined) payload.blockedCommands = data.blocked_commands;
+  if (data.email_alerts !== undefined) payload.emailAlerts = data.email_alerts;
+  if (data.slack_integration !== undefined) payload.slackIntegration = data.slack_integration;
+  if (data.alert_on_critical !== undefined) payload.alertOnCritical = data.alert_on_critical;
+  if (data.alert_on_circuit_break !== undefined) payload.alertOnCircuitBreak = data.alert_on_circuit_break;
+  return payload;
+};
 
 export interface GraphNode {
   id: string;
@@ -217,7 +274,17 @@ export const authAPI = {
 // Scans
 export const scansAPI = {
   list: async (params?: { skip?: number; limit?: number, status?: string }): Promise<{ scans: Scan[], total: number }> => {
-    const response = await api.get("/scans", { params });
+    const limit = params?.limit;
+    const skip = params?.skip;
+    const pageSize = limit ?? 10;
+    const page = skip != null && pageSize > 0 ? Math.floor(skip / pageSize) + 1 : 1;
+    const response = await api.get("/scans", {
+      params: {
+        page,
+        page_size: pageSize,
+        status: params?.status,
+      }
+    });
     return response.data;
   },
 
@@ -227,7 +294,13 @@ export const scansAPI = {
   },
 
   create: async (data: ScanCreate): Promise<Scan> => {
-    const response = await api.post("/scans", data);
+    // Backend expects scanProfile (camelCase); frontend uses scan_profile.
+    const payload: any = {
+      target: data.target,
+      scanProfile: data.scan_profile,
+      advancedOptions: data.advancedOptions,
+    };
+    const response = await api.post("/scans", payload);
     return response.data;
   },
 
@@ -270,7 +343,20 @@ export const logsAPI = {
     search?: string;
     scan_id?: number;
   }): Promise<{ logs: Log[], total: number }> => {
-    const response = await api.get("/logs", { params });
+    const limit = params?.limit;
+    const skip = params?.skip;
+    const pageSize = limit ?? 50;
+    const page = skip != null && pageSize > 0 ? Math.floor(skip / pageSize) + 1 : 1;
+    const response = await api.get("/logs", {
+      params: {
+        page,
+        page_size: pageSize,
+        level: params?.level,
+        component: params?.component,
+        search: params?.search,
+        scan_id: params?.scan_id,
+      }
+    });
     return response.data;
   },
 };
@@ -287,8 +373,28 @@ export const dashboardAPI = {
 export const graphAPI = {
   get: async (): Promise<GraphData> => {
     const response = await api.get("/graph");
-    // The backend sends "edges", but react-force-graph wants "links"
-    return { nodes: response.data.nodes, links: response.data.edges };
+    // Backend returns edges with keys {from,to}; react-force-graph expects {source,target}
+    const rawEdges: any[] = Array.isArray(response.data?.edges)
+      ? response.data.edges
+      : Array.isArray(response.data?.links)
+        ? response.data.links
+        : [];
+
+    const links: GraphLink[] = rawEdges
+      .map((edge: any) => {
+        const source = edge?.from ?? edge?.from_node ?? edge?.source;
+        const target = edge?.to ?? edge?.to_node ?? edge?.target;
+        if (!source || !target) return null;
+        return {
+          source: String(source),
+          target: String(target),
+          relationship: String(edge?.relationship ?? "CONNECTED"),
+          properties: edge?.properties ?? {},
+        };
+      })
+      .filter(Boolean) as GraphLink[];
+
+    return { nodes: response.data.nodes ?? [], links };
   },
 
   getNode: async (nodeId: string): Promise<GraphNode> => {
@@ -301,11 +407,39 @@ export const graphAPI = {
 export const settingsAPI = {
   get: async (): Promise<Settings> => {
     const response = await api.get("/settings");
-    return response.data;
+    return mapSettingsFromApi(response.data);
   },
 
   update: async (data: Partial<Settings>): Promise<Settings> => {
-    const response = await api.put("/settings", data);
+    const response = await api.put("/settings", mapSettingsToApi(data));
+    return mapSettingsFromApi(response.data);
+  },
+
+  testN8n: async (): Promise<{ message: string }> => {
+    const response = await api.post("/settings/integrations/n8n/test");
+    return response.data;
+  },
+
+  syncCvesNow: async (): Promise<{ message: string; taskId?: string }> => {
+    const response = await api.post("/settings/cve/sync-now");
+    return response.data;
+  },
+};
+
+// CVEs / Chroma utilities
+export const cvesAPI = {
+  status: async (): Promise<ChromaStatus> => {
+    const response = await api.get("/cves/status");
+    return response.data;
+  },
+
+  seedDemo: async (reset: boolean = false): Promise<{ message: string; added: number; count: number }> => {
+    const response = await api.post("/cves/seed-demo", { reset });
+    return response.data;
+  },
+
+  search: async (q: string, n: number = 5, severity?: string): Promise<{ results: CveSearchResult[] }> => {
+    const response = await api.get("/cves/search", { params: { q, n, severity } });
     return response.data;
   },
 };

@@ -51,7 +51,11 @@ export function RecentScans() {
           const timeAgo = formatDistanceToNow(new Date(scan.start_time), { addSuffix: true });
           
           return (
-            <div key={scan.scan_id} className="p-4 rounded-lg border border-border bg-card/50 hover:bg-muted/30 transition-all duration-200 cursor-pointer group">
+            <Link
+              key={scan.id}
+              to={`/logs?scan_id=${scan.id}`}
+              className="block p-4 rounded-lg border border-border bg-card/50 hover:bg-muted/30 transition-all duration-200 cursor-pointer group"
+            >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
@@ -60,10 +64,9 @@ export function RecentScans() {
                       <StatusIcon className={cn("h-3 w-3 mr-1", status.animate && "animate-spin")} />{status.label}
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground mb-2">{scan.scan_profile}</p>
+                  <p className="text-xs text-muted-foreground mb-2">{scan.profile}</p>
                   <div className="flex items-center gap-4 text-xs">
                     <span className="text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" />{timeAgo}</span>
-                    {scan.progress > 0 && <span className="text-muted-foreground">Progress: {scan.progress}%</span>}
                   </div>
                 </div>
                 {totalFindings > 0 && typeof findings === 'object' && (
@@ -75,7 +78,7 @@ export function RecentScans() {
                   </div>
                 )}
               </div>
-            </div>
+            </Link>
           );
         })
         )}

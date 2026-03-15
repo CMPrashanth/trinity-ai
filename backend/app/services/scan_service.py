@@ -1,14 +1,38 @@
 """Scan service - handles scan creation and execution"""
 
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import secrets
 
-from ..models import Scan, ScanStatus, ScanProfile, Vulnerability, Log, LogLevel, SeverityLevel, VulnerabilityStatus
+import httpx
+
+from ..models import Scan, ScanStatus, ScanProfile, Vulnerability, Log, LogLevel, SeverityLevel, VulnerabilityStatus, UserSettings
 from ..schemas import ScanCreate
 from .ai_interface import DummyAI, AIInterface
 from ..config import settings
+
+
+def _to_aware_utc(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _notify_n8n(payload: dict) -> None:
+    """Best-effort webhook notification to n8n (non-fatal if it fails)."""
+
+    webhook_url = settings.N8N_WEBHOOK_URL_CLEAN
+    if not webhook_url:
+        return
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            client.post(webhook_url, json=payload)
+    except Exception as exc:  # pragma: no cover
+        print(f"⚠️ n8n webhook notification failed: {exc}")
 
 
 def _create_default_ai() -> AIInterface:
@@ -85,10 +109,44 @@ class ScanService:
             return
         
         try:
+            # Pull user-specific guardrails (scope + blocked commands)
+            user_settings = (
+                self.db.query(UserSettings)
+                .filter(UserSettings.user_id == scan.user_id)
+                .first()
+            )
+
             # Update status to running
             scan.status = ScanStatus.RUNNING
-            scan.start_time = datetime.utcnow()
+            scan.start_time = datetime.now(timezone.utc)
             self.db.commit()
+
+            # Prepare execution configuration passed down into TrinityAI
+            execution_config = dict(scan.config or {})
+            execution_config.setdefault("scan_profile", scan.profile.value)
+
+            if user_settings is not None:
+                execution_config.setdefault("execution_timeout", user_settings.execution_timeout)
+                execution_config.setdefault("max_retries", user_settings.max_retries)
+                execution_config.setdefault("enable_self_healing", user_settings.enable_self_healing)
+                if user_settings.allowed_subnet:
+                    # TrinityAI expects this key for scope validation
+                    raw_allowed = str(user_settings.allowed_subnet)
+                    allowed_cidrs = [cidr.strip() for cidr in raw_allowed.split(",") if cidr.strip()]
+                    execution_config.setdefault("allowed_cidrs", allowed_cidrs)
+                if user_settings.blocked_commands:
+                    execution_config.setdefault("blocked_commands", user_settings.blocked_commands)
+
+            _notify_n8n(
+                {
+                    "event": "scan_started",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "scan_id": scan.scan_id,
+                    "target": scan.target,
+                    "profile": scan.profile.value,
+                    "status": "running",
+                }
+            )
             
             self._create_log(scan.id, LogLevel.INFO, "Planner", f"Generating attack plan for target {scan.target}")
             
@@ -96,16 +154,13 @@ class ScanService:
             attack_plan = await self.ai.generate_attack_plan(
                 target=scan.target,
                 scan_profile=scan.profile.value,
-                config=scan.config
+                config=execution_config
             )
             
             self._create_log(scan.id, LogLevel.SUCCESS, "Guard", "Plan validated successfully")
             
             # Step 2: Execute the scan
             self._create_log(scan.id, LogLevel.INFO, "Executor", "Executing scan commands")
-
-            execution_config = dict(scan.config or {})
-            execution_config.setdefault("scan_profile", scan.profile.value)
 
             scan_result = await self.ai.execute_scan(attack_plan, execution_config)
             
@@ -128,7 +183,8 @@ class ScanService:
                     level_map.get(log_entry.level, LogLevel.INFO),
                     log_entry.component,
                     log_entry.message,
-                    log_entry.details
+                    log_entry.details,
+                    timestamp=_to_aware_utc(log_entry.timestamp),
                 )
             
             # Step 4: Update graph (if enabled)
@@ -142,10 +198,12 @@ class ScanService:
             
             # Mark as completed
             scan.status = ScanStatus.COMPLETED
-            scan.end_time = datetime.utcnow()
+            scan.end_time = datetime.now(timezone.utc)
             
             # Calculate duration
-            duration_seconds = (scan.end_time - scan.start_time).total_seconds()
+            start_time = _to_aware_utc(scan.start_time)
+            end_time = _to_aware_utc(scan.end_time)
+            duration_seconds = (end_time - start_time).total_seconds() if start_time and end_time else 0.0
             minutes = int(duration_seconds // 60)
             seconds = int(duration_seconds % 60)
             scan.duration = f"{minutes}m {seconds}s"
@@ -153,21 +211,58 @@ class ScanService:
             self.db.commit()
             
             self._create_log(scan.id, LogLevel.SUCCESS, "System", f"Scan {scan.scan_id} completed successfully")
+
+            _notify_n8n(
+                {
+                    "event": "scan_completed",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "scan_id": scan.scan_id,
+                    "target": scan.target,
+                    "profile": scan.profile.value,
+                    "status": "success",
+                    "findings": scan.findings,
+                    "duration": scan.duration,
+                }
+            )
             
         except Exception as e:
             # Handle scan failure
             scan.status = ScanStatus.FAILED
-            scan.end_time = datetime.utcnow()
+            scan.end_time = datetime.now(timezone.utc)
             self.db.commit()
             
             self._create_log(scan.id, LogLevel.ERROR, "System", f"Scan failed: {str(e)}")
+
+            _notify_n8n(
+                {
+                    "event": "scan_completed",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "scan_id": scan.scan_id,
+                    "target": scan.target,
+                    "profile": scan.profile.value,
+                    "status": "failed",
+                    "error": str(e),
+                }
+            )
     
     async def _process_scan_results(self, scan: Scan, scan_result):
         """Process scan results and create vulnerability records"""
         
         findings_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        seen: set[tuple[str, str, str, str]] = set()
         
         for vuln_data in scan_result.vulnerabilities_found:
+            cve_key = str(getattr(vuln_data, "cve", "") or "").strip().upper()
+            target_key = str(getattr(vuln_data, "target", "") or scan.target).strip()
+            port_key = str(getattr(vuln_data, "port", "") or "unknown").strip()
+            service_key = str(getattr(vuln_data, "service", "") or "").strip().lower()
+
+            dedup_key = (cve_key, target_key, port_key, service_key)
+            if cve_key and dedup_key in seen:
+                continue
+            if cve_key:
+                seen.add(dedup_key)
+
             # Create vulnerability record
             vuln_id = f"vuln-{secrets.token_hex(4)}"
             
@@ -216,7 +311,9 @@ class ScanService:
         level: LogLevel,
         component: str,
         message: str,
-        details: Optional[str] = None
+        details: Optional[str] = None,
+        *,
+        timestamp: Optional[datetime] = None,
     ):
         """Create a log entry"""
         log = Log(
@@ -224,7 +321,8 @@ class ScanService:
             level=level,
             component=component,
             message=message,
-            details=details
+            details=details,
+            timestamp=timestamp,
         )
         self.db.add(log)
         self.db.commit()

@@ -15,6 +15,7 @@ from .api import (
     graph,
     logs,
     settings as settings_router,
+    cves,
     agent,
     dashboard,
 )
@@ -47,6 +48,15 @@ async def lifespan(app: FastAPI):
         if vector_service.collection is not None:
             count = vector_service.collection.count()
             print(f"✅ ChromaDB reachable, CVE records available: {count}")
+
+            # If the collection is empty, seed a small curated baseline so
+            # enrichment workflows have something to retrieve immediately.
+            if count == 0:
+                try:
+                    added = await vector_service.seed_demo_cves(reset=False)
+                    print(f"✅ Seeded demo CVEs on startup: {added}")
+                except Exception as seed_exc:
+                    print(f"⚠️ ChromaDB auto-seed skipped: {seed_exc}")
         else:
             print("⚠️ ChromaDB not available; fallback CVE data will be used")
     except Exception as exc:
@@ -68,7 +78,7 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.CORS_ORIGINS_LIST,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,6 +93,7 @@ app.include_router(vulnerabilities.router, prefix=settings.API_PREFIX, tags=["Vu
 app.include_router(graph.router, prefix=settings.API_PREFIX, tags=["Graph"])
 app.include_router(logs.router, prefix=settings.API_PREFIX, tags=["Logs"])
 app.include_router(settings_router.router, prefix=settings.API_PREFIX, tags=["Settings"])
+app.include_router(cves.router, prefix=settings.API_PREFIX, tags=["CVEs"])
 
 
 @app.get("/")
