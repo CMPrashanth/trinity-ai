@@ -88,6 +88,21 @@ Suggested demo flow:
    - Vulnerabilities list populates
    - Graph page shows nodes/links (if Neo4j up)
 
+### Demo seed data (so UI is not empty)
+
+Important: Postgres/Neo4j/Chroma store their data in **Docker volumes**, which are not committed to git.
+If you want the UI to show populated scans/vulnerabilities/logs immediately (useful for screenshots), run:
+
+- `docker compose up -d --build`
+- Seed relational DB (creates 2 completed scans + vulnerabilities + logs + demo admin user):
+   - `docker compose exec backend python -m scripts.seed_demo_db --reset`
+- Optional: seed a small Neo4j topology (best-effort):
+   - `docker compose exec backend python -m scripts.seed_demo_db --reset --with-graph`
+
+Demo login created by the seeder:
+- Email: `demo@trinity.local`
+- Password: `demo1234`
+
 ## Where to look in code
 
 Key files:
