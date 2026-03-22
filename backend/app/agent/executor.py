@@ -6,6 +6,7 @@ import asyncio
 import re
 import subprocess
 import xml.etree.ElementTree as ET
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -191,8 +192,11 @@ class CommandExecutor:
                     timeout=effective_timeout
                 )
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+                with suppress(ProcessLookupError):
+                    process.kill()
+                # Avoid propagating cancellation while cleaning up timed-out subprocesses.
+                with suppress(asyncio.TimeoutError, asyncio.CancelledError, ProcessLookupError):
+                    await asyncio.wait_for(process.wait(), timeout=2)
                 breaker.record_failure()
                 return ExecutionResult(
                     success=False,
@@ -200,6 +204,22 @@ class CommandExecutor:
                     stderr=f"TIMEOUT: Command exceeded {effective_timeout}s",
                     exit_code=-3,
                     duration_seconds=float(effective_timeout),
+                    command=command,
+                )
+            except asyncio.CancelledError:
+                # If the event loop is being interrupted, still attempt process cleanup
+                # and return a deterministic timeout-style failure object.
+                with suppress(ProcessLookupError):
+                    process.kill()
+                with suppress(asyncio.TimeoutError, asyncio.CancelledError, ProcessLookupError):
+                    await asyncio.wait_for(process.wait(), timeout=2)
+                breaker.record_failure()
+                return ExecutionResult(
+                    success=False,
+                    stdout="",
+                    stderr="INTERRUPTED: Command execution cancelled by runtime",
+                    exit_code=-5,
+                    duration_seconds=(datetime.utcnow() - start_time).total_seconds(),
                     command=command,
                 )
             

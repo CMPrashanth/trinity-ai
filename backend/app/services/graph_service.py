@@ -293,12 +293,12 @@ class GraphService:
                 properties.setdefault("name", label)
                 query = """
                 MERGE (n:Network {cidr: $cidr})
-                SET n.scan_id = $scan_id, n.updated_at = datetime(), n.label = $label, n.name = $label
+                SET n.scan_id = $scan_id, n.updated_at = datetime()
                 """
                 for key, value in properties.items():
                     query += f", n.{key} = ${key}"
 
-                session.run(query, cidr=cidr, scan_id=scan_id, label=label, **properties)
+                session.run(query, cidr=cidr, scan_id=scan_id, **properties)
                 return True
         except Exception as e:
             print(f"⚠️  Create network node failed: {e}")
