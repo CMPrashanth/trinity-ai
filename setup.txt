@@ -96,6 +96,12 @@ Use this to generate real, reproducible Results tables (baseline vs Trinity).
    Output:
    - app/data/final_eval_narrative.txt
 
+6) Validate report alignment (main.tex claims vs measured outputs):
+   docker compose exec backend python -m scripts.check_report_alignment --results app/data/final_eval_results.json --report ../main.tex --tolerance 0.2 --output app/data/final_eval_alignment.txt
+
+   Output:
+   - app/data/final_eval_alignment.txt
+
 4) Scenario config (edit as needed for your lab):
    - app/data/eval_scenarios.json
 
