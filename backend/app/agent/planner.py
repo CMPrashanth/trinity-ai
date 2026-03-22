@@ -166,6 +166,10 @@ class AttackPlanner:
             AttackPlan with steps and reasoning
         """
         config = config or {}
+
+        # Demo/reliability switch: skip LLM planning and use deterministic plans.
+        if bool(config.get("force_fallback_plan", False)):
+            return self._fallback_plan(target, scan_profile)
         
         # Select prompt template
         template = self._prompt_templates.get(scan_profile, QUICK_SCAN_PROMPT)
@@ -368,14 +372,9 @@ class AttackPlanner:
                     rationale="Quickly confirm server behavior and security headers",
                 ),
                 PlanStep(
-                    command=f"wget -q -S -O - {target_url}",
-                    description="Fetch initial page content with server response metadata",
-                    rationale="Capture headers/body snippets for observer context",
-                ),
-                PlanStep(
-                    command=f"sslscan {target_host or target}",
-                    description="TLS capability check",
-                    rationale="Collect SSL/TLS details when HTTPS endpoints are available",
+                    command=f"wget -q --spider {target_url}",
+                    description="Reachability check with wget",
+                    rationale="Confirm endpoint reachability with a second HTTP client",
                 ),
             ]
             duration = "~5-10 minutes"

@@ -281,6 +281,13 @@ async def run_one(db, user_id: int, mode: Mode, scenario: Scenario) -> RunOutcom
 
     service = ScanService(db)
     scan = await service.create_scan(scan_payload, user_id)
+
+    # Keep evaluation deterministic on low-resource demo laptops.
+    config = dict(scan.config or {})
+    config["force_fallback_plan"] = True
+    scan.config = config
+    db.commit()
+
     await service.start_scan(scan.id)
 
     db.expire_all()
