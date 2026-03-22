@@ -1,0 +1,26 @@
+[
+  {
+    "name": "baseline_4_host",
+    "description": "Baseline lab with 4 expected hosts",
+    "target": "10.10.0.0/24",
+    "scan_profile": "quick",
+    "expected_hosts": 4,
+    "noisy": false
+  },
+  {
+    "name": "mixed_10_host",
+    "description": "Mixed-service subnet with 10 expected hosts",
+    "target": "10.10.0.0/24",
+    "scan_profile": "full",
+    "expected_hosts": 10,
+    "noisy": false
+  },
+  {
+    "name": "noisy_services",
+    "description": "Noisy profile with intermittent service failures",
+    "target": "10.10.0.0/24",
+    "scan_profile": "stealth",
+    "expected_hosts": 10,
+    "noisy": true
+  }
+]

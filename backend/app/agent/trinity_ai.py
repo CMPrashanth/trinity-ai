@@ -10,6 +10,7 @@ This module implements the full Trinity architecture:
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 from datetime import datetime
@@ -172,8 +173,36 @@ class TrinityAI(AIInterface):
             if safety_ok:
                 validated_steps.append(step)
                 self._log("info", "Guard", f"Approved: {step.description}")
+                self._log(
+                    "debug",
+                    "Metrics",
+                    "guard_decision",
+                    details=json.dumps(
+                        {
+                            "event": "guard_decision",
+                            "decision": "approved",
+                            "reason": "safe",
+                            "command": step.command,
+                            "description": step.description,
+                        }
+                    ),
+                )
             else:
                 self._log("warning", "Guard", f"Blocked: {step.description}", safety_msg)
+                self._log(
+                    "debug",
+                    "Metrics",
+                    "guard_decision",
+                    details=json.dumps(
+                        {
+                            "event": "guard_decision",
+                            "decision": "rejected",
+                            "reason": safety_msg or "blocked",
+                            "command": step.command,
+                            "description": step.description,
+                        }
+                    ),
+                )
         
         if not validated_steps:
             self._log("error", "Guard", "No valid steps in plan after safety check")
@@ -382,6 +411,23 @@ class TrinityAI(AIInterface):
             allowed_cidrs=config.get("allowed_cidrs"),
             blocked_tokens=config.get("blocked_commands"),
         )
+
+        self._log(
+            "debug",
+            "Metrics",
+            "command_attempt",
+            details=json.dumps(
+                {
+                    "event": "command_attempt",
+                    "attempt": 1,
+                    "phase": "initial",
+                    "success": result.success,
+                    "exit_code": result.exit_code,
+                    "duration_seconds": result.duration_seconds,
+                    "command": command,
+                }
+            ),
+        )
         
         if result.success:
             return result
@@ -425,12 +471,29 @@ class TrinityAI(AIInterface):
                 # Validate corrected command
                 safety_ok, _ = validate_safety(corrected_cmd)
                 if safety_ok:
-                    return await self.executor.execute(
+                    healed_result = await self.executor.execute(
                         corrected_cmd,
                         target=target,
                         allowed_cidrs=config.get("allowed_cidrs"),
                         blocked_tokens=config.get("blocked_commands"),
                     )
+                    self._log(
+                        "debug",
+                        "Metrics",
+                        "command_attempt",
+                        details=json.dumps(
+                            {
+                                "event": "command_attempt",
+                                "attempt": attempts + 2,
+                                "phase": "healed",
+                                "success": healed_result.success,
+                                "exit_code": healed_result.exit_code,
+                                "duration_seconds": healed_result.duration_seconds,
+                                "command": corrected_cmd,
+                            }
+                        ),
+                    )
+                    return healed_result
                 else:
                     self._log("warning", "SelfHeal", "Corrected command blocked by guard")
             

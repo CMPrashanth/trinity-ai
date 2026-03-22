@@ -75,3 +75,24 @@ docker compose logs -f celery_beat
 ----------------
 cd "G:\final project\project code"
 docker compose down
+
+9. FINAL EVALUATION (CHAPTER 9 METRICS)
+--------------------------------------
+Use this to generate real, reproducible Results tables (baseline vs Trinity).
+
+1) Ensure stack is up:
+   docker compose up -d
+
+2) Run evaluation from backend container:
+   docker compose exec backend python -m scripts.run_final_evaluation --runs 30 --mode both --reset
+
+3) Output files generated:
+   - app/data/final_eval_results.json
+   - app/data/final_eval_tables.tex
+
+4) Scenario config (edit as needed for your lab):
+   - app/data/eval_scenarios.json
+
+Notes:
+- Exact percentages depend on your lab stability and host/service availability.
+- Do not hardcode report numbers: use the generated JSON/TEX outputs.
