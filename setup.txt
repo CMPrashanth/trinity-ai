@@ -90,6 +90,12 @@ Use this to generate real, reproducible Results tables (baseline vs Trinity).
    - app/data/final_eval_results.json
    - app/data/final_eval_tables.tex
 
+5) Generate thesis-ready narrative text from measured outputs:
+   docker compose exec backend python -m scripts.generate_results_narrative --input app/data/final_eval_results.json --output app/data/final_eval_narrative.txt
+
+   Output:
+   - app/data/final_eval_narrative.txt
+
 4) Scenario config (edit as needed for your lab):
    - app/data/eval_scenarios.json
 
