@@ -79,7 +79,7 @@ services:
           memory: 6G
     environment:
       - OLLAMA_LISTEN=0.0.0.0:11434
-      - LLM_MODEL_ID=${LLM_MODEL_ID:-WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-llama3.2:3b}
     volumes:
       - ollama_models:/root/.ollama
     ports:
@@ -153,7 +153,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
       - USE_SQLITE=False
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
-      - LLM_MODEL_ID=${LLM_MODEL_ID:-WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-llama3.2:3b}
       - USE_LANGCHAIN=${USE_LANGCHAIN:-true}
       - USE_LANGGRAPH=${USE_LANGGRAPH:-true}
       - NVD_API_KEY=${NVD_API_KEY:-}
@@ -204,7 +204,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
       - USE_SQLITE=False
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
-      - LLM_MODEL_ID=${LLM_MODEL_ID:-WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-llama3.2:3b}
       - USE_LANGCHAIN=${USE_LANGCHAIN:-true}
       - USE_LANGGRAPH=${USE_LANGGRAPH:-true}
       - NVD_API_KEY=${NVD_API_KEY:-}
@@ -249,7 +249,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
       - USE_SQLITE=False
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
-      - LLM_MODEL_ID=${LLM_MODEL_ID:-WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-8B:latest}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-llama3.2:3b}
       - USE_LANGCHAIN=${USE_LANGCHAIN:-true}
       - USE_LANGGRAPH=${USE_LANGGRAPH:-true}
       - NVD_API_KEY=${NVD_API_KEY:-}

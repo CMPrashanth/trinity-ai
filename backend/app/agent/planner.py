@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from ..services.ollama_client import OllamaClient
 from ..services.ai_interface import AttackPlan, PlanStep
 from ..config import settings
+from .guard import split_target_host_port
 
 
 # System prompts for different planning modes
@@ -300,6 +301,9 @@ class AttackPlanner:
     
     def _fallback_plan(self, target: str, scan_profile: str) -> AttackPlan:
         """Generate a deterministic fallback plan when LLM is unavailable."""
+
+        target_host, target_port = split_target_host_port(target)
+        target_url = self._build_http_url(target_host or target, target_port)
         
         if scan_profile == "quick":
             steps = [
@@ -349,14 +353,29 @@ class AttackPlanner:
         elif scan_profile == "web":
             steps = [
                 PlanStep(
-                    command=f"nmap -sV -p 80,443,8080,8443 {target}",
+                    command=f"nmap -sT -sV -Pn -p 80,443,3000,8080,8443 {target_host or target}",
                     description="Web port service detection",
                     rationale="Identify web servers",
                 ),
                 PlanStep(
-                    command=f"nmap --script=http-enum,http-headers {target}",
+                    command=f"nmap -sV -Pn --script=http-enum,http-headers,http-title -p 80,443,3000,8080,8443 {target_host or target}",
                     description="Web enumeration scripts",
                     rationale="Discover web application details",
+                ),
+                PlanStep(
+                    command=f"curl -s -I {target_url}",
+                    description="Collect HTTP response headers",
+                    rationale="Quickly confirm server behavior and security headers",
+                ),
+                PlanStep(
+                    command=f"wget -q -S -O - {target_url}",
+                    description="Fetch initial page content with server response metadata",
+                    rationale="Capture headers/body snippets for observer context",
+                ),
+                PlanStep(
+                    command=f"sslscan {target_host or target}",
+                    description="TLS capability check",
+                    rationale="Collect SSL/TLS details when HTTPS endpoints are available",
                 ),
             ]
             duration = "~5-10 minutes"
@@ -377,3 +396,15 @@ class AttackPlanner:
             reasoning=f"Fallback {scan_profile} plan (LLM unavailable)",
             estimated_duration=duration,
         )
+
+    @staticmethod
+    def _build_http_url(host: str, port: Optional[int]) -> str:
+        clean_host = (host or "").strip()
+        if not clean_host:
+            clean_host = "127.0.0.1"
+
+        if port in {443, 8443}:
+            return f"https://{clean_host}:{port}"
+        if port:
+            return f"http://{clean_host}:{port}"
+        return f"http://{clean_host}"

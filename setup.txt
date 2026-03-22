@@ -26,6 +26,13 @@ Start all services:
 
 docker compose up -d
 
+Laptop/GPU mode (NVIDIA, optional):
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+
+Verify Ollama model + processor (screenshot-friendly):
+docker compose exec ollama ollama list
+docker compose exec ollama ollama ps
+
 Services started:
 - `postgres` (relational DB)
 - `neo4j` (graph DB)
@@ -43,6 +50,7 @@ docker compose ps
 
 Note:
 - First start can take a few minutes while Ollama loads/pulls model.
+- Default model is set to `llama3.2:3b` for better laptop stability.
 
 5. START FRONTEND
 -----------------
@@ -108,3 +116,16 @@ Use this to generate real, reproducible Results tables (baseline vs Trinity).
 Notes:
 - Exact percentages depend on your lab stability and host/service availability.
 - Do not hardcode report numbers: use the generated JSON/TEX outputs.
+
+10. ONE-RUN DEMO (FOR FINAL REVIEW SCREENSHOTS)
+----------------------------------------------
+If you only need one successful proof run with visible multi-tool logs:
+
+1) Create a WEB scan in UI with target: `10.10.0.11:3001` or `10.10.0.11:3000`
+2) Use profile: `Web`
+3) In logs, capture `Tool` entries showing commands (nmap + whatweb + curl + dirb)
+4) Capture screenshots of:
+   - Logs page (tool commands)
+   - Findings page
+   - Graph page
+   - Terminal output of `docker compose exec ollama ollama ps`

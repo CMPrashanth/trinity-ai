@@ -1,10 +1,10 @@
 [
   {
     "name": "baseline_4_host",
-    "description": "Baseline lab with 4 expected hosts",
-    "target": "10.10.0.0/24",
-    "scan_profile": "quick",
-    "expected_hosts": 4,
+    "description": "Web demo target with expected single host",
+    "target": "10.10.0.11:3000",
+    "scan_profile": "web",
+    "expected_hosts": 1,
     "noisy": false
   },
   {
