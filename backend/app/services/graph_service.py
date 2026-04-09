@@ -71,10 +71,14 @@ class GraphService:
         try:
             with self.driver.session() as session:
                 # Query for nodes
+                #
+                # IMPORTANT:
+                # We store scan history in `scan_ids` (list) + `last_scan_id`.
+                # Older nodes may only have `scan_id`.
                 if scan_id:
                     node_query = """
                     MATCH (n)
-                    WHERE n.scan_id = $scan_id
+                    WHERE $scan_id IN coalesce(n.scan_ids, [n.scan_id])
                     RETURN id(n) as id, labels(n)[0] as type, properties(n) as properties
                     """
                     nodes_result = session.run(node_query, scan_id=scan_id)
@@ -120,7 +124,13 @@ class GraphService:
                 if scan_id:
                     edge_query = """
                     MATCH (a)-[r]->(b)
-                    WHERE a.scan_id = $scan_id
+                    WHERE (
+                        $scan_id IN coalesce(r.scan_ids, [])
+                        OR (
+                            $scan_id IN coalesce(a.scan_ids, [a.scan_id])
+                            AND $scan_id IN coalesce(b.scan_ids, [b.scan_id])
+                        )
+                    )
                     RETURN id(a) as from, id(b) as to, type(r) as relationship, properties(r) as properties
                     """
                     edges_result = session.run(edge_query, scan_id=scan_id)
@@ -258,7 +268,14 @@ class GraphService:
                 properties.setdefault("name", ip)
                 query = """
                 MERGE (h:Host {ip: $ip})
-                SET h.scan_id = $scan_id, h.updated_at = datetime()
+                SET h.scan_id = $scan_id,
+                    h.last_scan_id = $scan_id,
+                    h.updated_at = datetime(),
+                    h.scan_ids = CASE
+                        WHEN h.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN h.scan_ids THEN h.scan_ids
+                        ELSE h.scan_ids + $scan_id
+                    END
                 """
                 for key, value in properties.items():
                     query += f", h.{key} = ${key}"
@@ -293,7 +310,14 @@ class GraphService:
                 properties.setdefault("name", label)
                 query = """
                 MERGE (n:Network {cidr: $cidr})
-                SET n.scan_id = $scan_id, n.updated_at = datetime()
+                SET n.scan_id = $scan_id,
+                    n.last_scan_id = $scan_id,
+                    n.updated_at = datetime(),
+                    n.scan_ids = CASE
+                        WHEN n.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN n.scan_ids THEN n.scan_ids
+                        ELSE n.scan_ids + $scan_id
+                    END
                 """
                 for key, value in properties.items():
                     query += f", n.{key} = ${key}"
@@ -330,8 +354,27 @@ class GraphService:
                 query = f"""
                 MATCH (h:Host {{ip: $host_ip}})
                 MATCH (n:Network {{cidr: $cidr}})
-                MERGE (h)-[:{relationship}]->(n)
-                SET h.scan_id = $scan_id, n.scan_id = $scan_id
+                MERGE (h)-[r:{relationship}]->(n)
+                SET h.scan_id = $scan_id,
+                    h.last_scan_id = $scan_id,
+                    n.scan_id = $scan_id,
+                    n.last_scan_id = $scan_id,
+                    r.last_scan_id = $scan_id,
+                    h.scan_ids = CASE
+                        WHEN h.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN h.scan_ids THEN h.scan_ids
+                        ELSE h.scan_ids + $scan_id
+                    END,
+                    n.scan_ids = CASE
+                        WHEN n.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN n.scan_ids THEN n.scan_ids
+                        ELSE n.scan_ids + $scan_id
+                    END,
+                    r.scan_ids = CASE
+                        WHEN r.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN r.scan_ids THEN r.scan_ids
+                        ELSE r.scan_ids + $scan_id
+                    END
                 """
                 session.run(query, host_ip=host_ip, cidr=cidr, scan_id=scan_id)
                 return True
@@ -359,8 +402,32 @@ class GraphService:
                 query = """
                 MATCH (h:Host {ip: $host_ip})
                 MERGE (p:Port {number: $port, host_ip: $host_ip})
-                SET p.service = $service, p.version = $version, p.scan_id = $scan_id, p.updated_at = datetime(), p.label = $label, p.name = $label
-                MERGE (h)-[:HAS_PORT]->(p)
+                SET p.service = $service,
+                    p.version = $version,
+                    p.scan_id = $scan_id,
+                    p.last_scan_id = $scan_id,
+                    p.updated_at = datetime(),
+                    p.label = $label,
+                    p.name = $label,
+                    p.scan_ids = CASE
+                        WHEN p.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN p.scan_ids THEN p.scan_ids
+                        ELSE p.scan_ids + $scan_id
+                    END,
+                    h.scan_id = $scan_id,
+                    h.last_scan_id = $scan_id,
+                    h.scan_ids = CASE
+                        WHEN h.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN h.scan_ids THEN h.scan_ids
+                        ELSE h.scan_ids + $scan_id
+                    END
+                MERGE (h)-[r:HAS_PORT]->(p)
+                SET r.last_scan_id = $scan_id,
+                    r.scan_ids = CASE
+                        WHEN r.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN r.scan_ids THEN r.scan_ids
+                        ELSE r.scan_ids + $scan_id
+                    END
                 """
                 session.run(query, host_ip=host_ip, port=port, service=service, version=version, scan_id=scan_id, label=label)
                 return True
@@ -389,8 +456,33 @@ class GraphService:
                 query = """
                 MATCH (h:Host {ip: $host_ip})
                 MERGE (c:CVE {cve_id: $cve_id})
-                SET c.severity = $severity, c.cvss = $cvss, c.title = $title, c.scan_id = $scan_id, c.updated_at = datetime(), c.label = $label, c.name = $label
-                MERGE (h)-[:VULNERABLE_TO]->(c)
+                SET c.severity = $severity,
+                    c.cvss = $cvss,
+                    c.title = $title,
+                    c.scan_id = $scan_id,
+                    c.last_scan_id = $scan_id,
+                    c.updated_at = datetime(),
+                    c.label = $label,
+                    c.name = $label,
+                    c.scan_ids = CASE
+                        WHEN c.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN c.scan_ids THEN c.scan_ids
+                        ELSE c.scan_ids + $scan_id
+                    END,
+                    h.scan_id = $scan_id,
+                    h.last_scan_id = $scan_id,
+                    h.scan_ids = CASE
+                        WHEN h.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN h.scan_ids THEN h.scan_ids
+                        ELSE h.scan_ids + $scan_id
+                    END
+                MERGE (h)-[r:VULNERABLE_TO]->(c)
+                SET r.last_scan_id = $scan_id,
+                    r.scan_ids = CASE
+                        WHEN r.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN r.scan_ids THEN r.scan_ids
+                        ELSE r.scan_ids + $scan_id
+                    END
                 """
                 session.run(query, host_ip=host_ip, cve_id=cve_id, severity=severity, cvss=cvss, title=title, scan_id=scan_id, label=label)
                 return True
@@ -418,7 +510,20 @@ class GraphService:
                 MATCH (h:Host {ip: $host_ip})-[:HAS_PORT]->(p:Port {number: $port, host_ip: $host_ip})
                 MERGE (s:Service {name: $service_name, scan_id: $scan_id})
                 SET s.banner = $banner, s.updated_at = datetime(), s.label = $service_name, s.name = $service_name
-                MERGE (p)-[:RUNS_SERVICE]->(s)
+                MERGE (p)-[r:RUNS_SERVICE]->(s)
+                SET p.scan_id = $scan_id,
+                    p.last_scan_id = $scan_id,
+                    p.scan_ids = CASE
+                        WHEN p.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN p.scan_ids THEN p.scan_ids
+                        ELSE p.scan_ids + $scan_id
+                    END,
+                    r.last_scan_id = $scan_id,
+                    r.scan_ids = CASE
+                        WHEN r.scan_ids IS NULL THEN [$scan_id]
+                        WHEN $scan_id IN r.scan_ids THEN r.scan_ids
+                        ELSE r.scan_ids + $scan_id
+                    END
                 """
                 session.run(
                     query,

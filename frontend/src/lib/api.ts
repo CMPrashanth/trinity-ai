@@ -371,8 +371,10 @@ export const dashboardAPI = {
 
 // Graph
 export const graphAPI = {
-  get: async (): Promise<GraphData> => {
-    const response = await api.get("/graph");
+  get: async (scanId?: string | null): Promise<GraphData> => {
+    const response = await api.get("/graph", {
+      params: scanId ? { scan_id: scanId } : undefined,
+    });
     // Backend returns edges with keys {from,to}; react-force-graph expects {source,target}
     const rawEdges: any[] = Array.isArray(response.data?.edges)
       ? response.data.edges
@@ -394,7 +396,12 @@ export const graphAPI = {
       })
       .filter(Boolean) as GraphLink[];
 
-    return { nodes: response.data.nodes ?? [], links };
+    const nodes: GraphNode[] = (response.data.nodes ?? []).map((n: any) => ({
+      ...n,
+      id: String(n.id),
+    }));
+
+    return { nodes, links };
   },
 
   getNode: async (nodeId: string): Promise<GraphNode> => {

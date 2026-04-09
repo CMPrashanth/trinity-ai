@@ -35,8 +35,9 @@ def _notify_n8n(payload: dict) -> None:
         print(f"⚠️ n8n webhook notification failed: {exc}")
 
 
-def _create_default_ai() -> AIInterface:
+def _create_default_ai(llm_model: Optional[str] = None) -> AIInterface:
     """Create the appropriate AI instance based on configuration."""
+    model_id = (llm_model or settings.LLM_MODEL_ID or "").strip() or settings.LLM_MODEL_ID
     
     # We want to use the real AI even in debug mode
     use_real_ai = True
@@ -45,12 +46,12 @@ def _create_default_ai() -> AIInterface:
         try:
             from ..agent import TrinityAI
             print("🔱 Initializing TrinityAI with backend")
-            return TrinityAI(llm_model=settings.LLM_MODEL_ID)
+            return TrinityAI(llm_model=model_id)
         except Exception as e:
             print(f"⚠️ TrinityAI initialization failed: {e}")
             print("   Falling back to DummyAI")
     
-    return DummyAI(llm_model=settings.LLM_MODEL_ID)
+    return DummyAI(llm_model=model_id)
 
 
 class ScanService:
@@ -115,6 +116,17 @@ class ScanService:
                 .filter(UserSettings.user_id == scan.user_id)
                 .first()
             )
+
+            # Apply per-user model selection if present.
+            requested_model = settings.LLM_MODEL_ID
+            if user_settings and user_settings.llm_model:
+                requested_model = str(user_settings.llm_model).strip() or settings.LLM_MODEL_ID
+
+            active_model = getattr(self.ai, "llm_model", "")
+            if not active_model or active_model != requested_model:
+                self.ai = _create_default_ai(requested_model)
+
+            self._create_log(scan.id, LogLevel.INFO, "Planner", f"Using model: {getattr(self.ai, 'llm_model', requested_model)}")
 
             # Update status to running
             scan.status = ScanStatus.RUNNING

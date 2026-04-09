@@ -167,8 +167,20 @@ class AttackPlanner:
         """
         config = config or {}
 
+        target_host, target_port = split_target_host_port(target)
+
         # Demo/reliability switch: skip LLM planning and use deterministic plans.
         if bool(config.get("force_fallback_plan", False)):
+            return self._fallback_plan(target, scan_profile)
+
+        # For explicit host:port web scans, deterministic plans are more stable
+        # and produce consistent multi-tool demo logs.
+        if scan_profile == "web" and target_port is not None:
+            return self._fallback_plan(target, scan_profile)
+
+        # Reliability-first behavior for demo and low-resource environments:
+        # prefer deterministic plans for non-web profiles unless explicitly disabled.
+        if scan_profile in {"quick", "full", "stealth"} and config.get("prefer_deterministic_profiles", True):
             return self._fallback_plan(target, scan_profile)
         
         # Select prompt template
@@ -187,7 +199,14 @@ class AttackPlanner:
             )
             
             # Parse response into AttackPlan
-            return self._parse_plan_response(response, target, scan_profile=scan_profile)
+            plan = self._parse_plan_response(response, target, scan_profile=scan_profile)
+
+            # Web profile can occasionally generate noisy or invalid chains.
+            # Keep demo scans stable by falling back to a deterministic web plan.
+            if scan_profile == "web" and self._is_unstable_web_plan(plan, target):
+                return self._fallback_plan(target, scan_profile)
+
+            return plan
             
         except Exception as e:
             # Fallback to deterministic plan if LLM fails
@@ -302,22 +321,117 @@ class AttackPlanner:
             ))
 
         return normalized
+
+    def _is_unstable_web_plan(self, plan: AttackPlan, target: str) -> bool:
+        """Detect unreliable LLM web plans and trigger deterministic fallback."""
+
+        target_host, target_port = split_target_host_port(target)
+        commands = [(step.command or "").strip() for step in plan.steps]
+
+        if not commands:
+            return True
+
+        # Keep web scans focused: avoid shell pipelines and tool chains that are
+        # brittle in constrained demo environments.
+        blocked_tokens = ("|", " dirb", " gobuster", " wfuzz", " sqlmap")
+        for command in commands:
+            lowered = f" {command.lower()}"
+            if any(token in lowered for token in blocked_tokens):
+                return True
+
+        if target_port is not None:
+            port_marker = f":{target_port}"
+            # Require at least one HTTP check to the exact requested port.
+            has_targeted_http = any(
+                ("curl" in cmd.lower() or "wget" in cmd.lower()) and port_marker in cmd
+                for cmd in commands
+            )
+            if not has_targeted_http:
+                return True
+
+            # If the target includes an explicit port, reject plans that probe
+            # only unrelated default web ports.
+            if any(
+                ("curl" in cmd.lower() or "wget" in cmd.lower())
+                and (f":{p}" in cmd)
+                and (p != target_port)
+                for cmd in commands
+                for p in (80, 443, 8080, 8443)
+            ):
+                return True
+
+        if target_host:
+            # Ensure the host appears in each command to avoid scanning random assets.
+            missing_host_refs = [cmd for cmd in commands if target_host not in cmd]
+            if missing_host_refs:
+                return True
+
+        return False
     
     def _fallback_plan(self, target: str, scan_profile: str) -> AttackPlan:
         """Generate a deterministic fallback plan when LLM is unavailable."""
 
         target_host, target_port = split_target_host_port(target)
         target_url = self._build_http_url(target_host or target, target_port)
+        web_ports = self._build_web_ports(target_port)
+        web_ports_csv = ",".join(str(p) for p in web_ports)
+        tcp_probe_port = target_port or 3000
         
         if scan_profile == "quick":
-            steps = [
-                PlanStep(
-                    command=f"nmap -sT -sV -T4 -Pn -p 1-1024,3000,8080,8443 {target}",
-                    description="Quick service detection on common ports (incl. web/app ports)",
-                    rationale="Avoid missing lab/web services that run on 3000/8080/8443",
-                ),
-            ]
-            duration = "~2-5 minutes"
+            if "/" in target:
+                steps = [
+                    PlanStep(
+                        command=f"nmap -sn {target}",
+                        description="Host discovery on the subnet",
+                        rationale="Identify live hosts before deeper probing",
+                    ),
+                    PlanStep(
+                        command=f"nmap -sT -sV -Pn -p 22,53,80,123,139,161,389,443,445,3389,3000,8080,8443 {target}",
+                        description="Network service detection on common infrastructure and app ports",
+                        rationale="Map likely attack surface quickly across live hosts",
+                    ),
+                    PlanStep(
+                        command=f"nmap -sV -Pn --script=banner,smb-security-mode,snmp-info -p 161,445 {target}",
+                        description="Protocol-focused NSE checks for SMB and SNMP",
+                        rationale="Collect basic network-hardening indicators without destructive actions",
+                    ),
+                ]
+                duration = "~5-12 minutes"
+            else:
+                probe_port = target_port or 8080
+                steps = [
+                    PlanStep(
+                        command=f"nmap -sT -sV -T4 -Pn -p 1-1024,3000,8080,8443 {target_host or target}",
+                        description="Quick service detection on host",
+                        rationale="Baseline host exposure for network pentesting",
+                    ),
+                    PlanStep(
+                        command=f"nmap -sV -Pn --script=vuln,banner -p 22,80,443,445,8080 {target_host or target}",
+                        description="NSE vulnerability and banner checks",
+                        rationale="Gather safe indicators of misconfiguration or known weaknesses",
+                    ),
+                    PlanStep(
+                        command=f"dig -x {target_host or target} +short",
+                        description="Reverse DNS lookup",
+                        rationale="Resolve naming clues that help target profiling",
+                    ),
+                    PlanStep(
+                        command=f"whois {target_host or target}",
+                        description="WHOIS ownership lookup",
+                        rationale="Add passive intelligence for asset attribution",
+                    ),
+                    PlanStep(
+                        command=f"traceroute -n -m 5 {target_host or target}",
+                        description="Route path observation",
+                        rationale="Identify basic network path and hop boundaries",
+                    ),
+                    PlanStep(
+                        command=f"nc -zv {target_host or target} {probe_port}",
+                        description="TCP probe with netcat",
+                        rationale="Quick confirmation of direct port reachability",
+                    ),
+                ]
+                duration = "~4-10 minutes"
             
         elif scan_profile == "full":
             steps = [
@@ -332,9 +446,14 @@ class AttackPlanner:
                     rationale="Comprehensive port and service enumeration",
                 ),
                 PlanStep(
-                    command=f"nmap -sC -sV --script=vuln {target}",
-                    description="Vulnerability script scan",
+                    command=f"nmap -sC -sV --script=vuln,banner,smb-security-mode,snmp-info {target}",
+                    description="Vulnerability and protocol security script scan",
                     rationale="Identify known vulnerabilities",
+                ),
+                PlanStep(
+                    command=f"traceroute -n -m 8 {target_host or target}",
+                    description="Network route mapping",
+                    rationale="Record path topology during full assessment",
                 ),
             ]
             duration = "~30-60 minutes"
@@ -357,12 +476,12 @@ class AttackPlanner:
         elif scan_profile == "web":
             steps = [
                 PlanStep(
-                    command=f"nmap -sT -sV -Pn -p 80,443,3000,8080,8443 {target_host or target}",
+                    command=f"nmap -sT -sV -Pn -p {web_ports_csv} {target_host or target}",
                     description="Web port service detection",
                     rationale="Identify web servers",
                 ),
                 PlanStep(
-                    command=f"nmap -sV -Pn --script=http-enum,http-headers,http-title -p 80,443,3000,8080,8443 {target_host or target}",
+                    command=f"nmap -sV -Pn --script=http-enum,http-headers,http-title,http-methods,vuln -p {web_ports_csv} {target_host or target}",
                     description="Web enumeration scripts",
                     rationale="Discover web application details",
                 ),
@@ -376,7 +495,36 @@ class AttackPlanner:
                     description="Reachability check with wget",
                     rationale="Confirm endpoint reachability with a second HTTP client",
                 ),
+                PlanStep(
+                    command=f"nc -zv {target_host or target} {tcp_probe_port}",
+                    description="TCP reachability probe with netcat",
+                    rationale="Validate direct TCP connectivity to target service port",
+                ),
             ]
+
+            if tcp_probe_port in {443, 8443}:
+                steps.append(
+                    PlanStep(
+                        command=f"openssl s_client -connect {target_host or target}:{tcp_probe_port} -servername {target_host or target} -brief",
+                        description="TLS handshake probe with OpenSSL",
+                        rationale="Capture TLS behavior when HTTPS is exposed",
+                    )
+                )
+                steps.append(
+                    PlanStep(
+                        command=f"sslscan --no-colour {target_host or target}:{tcp_probe_port}",
+                        description="SSL/TLS cipher scan",
+                        rationale="Enumerate supported ciphers and TLS configuration",
+                    )
+                )
+            else:
+                steps.append(
+                    PlanStep(
+                        command=f"dig -x {target_host or target} +short",
+                        description="Reverse DNS lookup",
+                        rationale="Capture host naming context for the web target",
+                    )
+                )
             duration = "~5-10 minutes"
             
         else:
@@ -407,3 +555,12 @@ class AttackPlanner:
         if port:
             return f"http://{clean_host}:{port}"
         return f"http://{clean_host}"
+
+    @staticmethod
+    def _build_web_ports(target_port: Optional[int]) -> List[int]:
+        base_ports = [80, 443, 3000, 8080, 8443]
+        if target_port is not None and target_port not in base_ports:
+            return [target_port] + base_ports
+        if target_port is not None:
+            return [target_port] + [p for p in base_ports if p != target_port]
+        return base_ports

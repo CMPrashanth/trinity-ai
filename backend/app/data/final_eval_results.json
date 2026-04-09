@@ -1,0 +1,94 @@
+{
+  "summary": {
+    "trinity": {
+      "runs": 1,
+      "hosts_fully_mapped_avg_pct": 100.0,
+      "end_to_end_success_runs": 1,
+      "end_to_end_success_pct": 100.0,
+      "runs_with_persisted_logs": 1,
+      "runs_with_persisted_logs_pct": 100.0,
+      "runs_with_persisted_vulns": 1,
+      "runs_with_persisted_vulns_pct": 100.0,
+      "guard": {
+        "approved": 4,
+        "rejected": 0,
+        "rejected_rate_pct": 0.0,
+        "out_of_scope": 0,
+        "blocked_t5": 0,
+        "destructive": 0
+      },
+      "retry": {
+        "first_attempt_success_pct": 100.0,
+        "initial_attempts": 4,
+        "initial_success": 4,
+        "transient_failures": 0,
+        "transient_recovered": 0,
+        "transient_recovered_pct": 0.0,
+        "circuit_breaker_activations": 0
+      }
+    }
+  },
+  "raw_results": {
+    "baseline": [],
+    "trinity": [
+      {
+        "mode": "trinity",
+        "scenario": {
+          "name": "baseline_4_host",
+          "description": "Web demo target with expected single host",
+          "target": "10.10.0.11:3000",
+          "scan_profile": "web",
+          "expected_hosts": 1,
+          "noisy": false
+        },
+        "scan_db_id": 86,
+        "scan_id": "scan-113f19ca",
+        "status": "completed",
+        "discovered_hosts": 1,
+        "expected_hosts": 1,
+        "log_count": 49,
+        "vulnerability_count": 3,
+        "guard_approved": 4,
+        "guard_rejected": 0,
+        "guard_rejected_out_of_scope": 0,
+        "guard_rejected_t5": 0,
+        "guard_rejected_destructive": 0,
+        "command_attempts_initial": 4,
+        "command_attempts_initial_success": 4,
+        "command_attempts_healed": 0,
+        "command_attempts_healed_success": 0,
+        "circuit_breaker_activated": false
+      }
+    ]
+  },
+  "meta": {
+    "runs_per_mode": 1,
+    "mode": "trinity",
+    "scenarios": [
+      {
+        "name": "baseline_4_host",
+        "description": "Web demo target with expected single host",
+        "target": "10.10.0.11:3000",
+        "scan_profile": "web",
+        "expected_hosts": 1,
+        "noisy": false
+      },
+      {
+        "name": "mixed_10_host",
+        "description": "Mixed-service subnet with 10 expected hosts",
+        "target": "10.10.0.0/24",
+        "scan_profile": "full",
+        "expected_hosts": 10,
+        "noisy": false
+      },
+      {
+        "name": "noisy_services",
+        "description": "Noisy profile with intermittent service failures",
+        "target": "10.10.0.0/24",
+        "scan_profile": "stealth",
+        "expected_hosts": 10,
+        "noisy": true
+      }
+    ]
+  }
+}
